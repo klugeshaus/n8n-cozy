@@ -98,7 +98,7 @@ packages/
 
 ---
 
-## Quickstart: validate → push → tap → add
+## Quickstart: validate → push → connect (tap) → add
 
 All commands run from the repository root. Replace `<org>`, `<git-url>` and
 the tag as needed.
@@ -144,28 +144,61 @@ cozypkg push oci://ghcr.io/<org>/n8n:v1.0.0 \
 and validates first unless `--skip-validate` is given. `--path .` is the repo
 root; the artifact root is `<root>/packages`.
 
-### 3. Tap (connect) the repository
+### 3. Connect the repository (Dashboard → Repositories)
+
+In the Cozystack dashboard this step is the **Repositories** page:
+
+> **Repositories**
+>
+> External-Apps repositories connected to this cluster and the packages they
+> expose. Connecting a repository makes its apps available but installs nothing.
+> Install an app with `cozypkg add`. Connect only sources you trust. The index
+> verifies signatures at publication time; connecting does not verify them.
+
+The form has two fields:
+
+- **Repository (oci:// reference)** — the published artifact, e.g.
+  `oci://ghcr.io/<org>/n8n:v1.0.0`.
+- **Pull secret (optional, for private repositories)** — the name of a
+  pull-credential Secret pre-created in `cozy-system`; leave it empty for a
+  public repository.
+
+Connecting creates a Flux `OCIRepository` named `tap-<org>-n8n` in `cozy-system`
+(labelled `cozystack.io/tap: "true"`), rewrites the PackageSource's `sourceRef`
+to it, and materialises the `cozy-apps.n8n` PackageSource. **Connecting installs
+nothing** — no `Package`, `HelmRelease` or `ApplicationDefinition` is created
+until step 4. The Repositories page then lists the connected reference together
+with the packages it exposes.
+
+The same operation from the CLI:
 
 ```sh
 cozypkg tap oci://ghcr.io/<org>/n8n:v1.0.0
+# private repository (Secret must already exist in cozy-system):
+cozypkg tap oci://ghcr.io/<org>/n8n:v1.0.0 --secret <pull-secret>
 ```
 
-This creates a Flux `OCIRepository` named `tap-<org>-n8n` in `cozy-system`
-(labelled `cozystack.io/tap: "true"`), rewrites the PackageSource's
-`sourceRef` to it, and materialises the `cozy-apps.n8n` PackageSource.
-**Tapping installs nothing** — no `Package`, `HelmRelease` or
-`ApplicationDefinition` is created at this point.
+**Trust and signatures.** Connecting only validates the artifact's structure;
+it does not verify signatures. Publication-time verification is the community
+index's job (`cozypkg validate --require-signature`). Installing an app from a
+connected repository runs its charts in your management cluster, so connect only
+sources you trust. To additionally verify the cosign signature on **every pull**,
+use the CLI-only flags `--certificate-identity` and `--certificate-oidc-issuer`
+(both required together — the Repositories form has no equivalent):
 
-For a private registry add `--secret <pull-secret>`; for signed artifacts add
-`--certificate-identity` / `--certificate-oidc-issuer` (both required together
-for Flux cosign verification at pull time).
+```sh
+cozypkg tap oci://ghcr.io/<org>/n8n:v1.0.0 \
+  --certificate-identity '<subject-regex>' \
+  --certificate-oidc-issuer '<issuer-regex>'
+```
 
 > **New in 1.7.1:** `tap` pins the artifact by digest. A tag-only reference is
 > pinned to the digest it first resolves to, so moving the tag upstream no
-> longer changes what the cluster runs — re-tap to move the pin. You can also
-> tap an immutable digest directly: `cozypkg tap oci://ghcr.io/<org>/n8n@sha256:<64 hex>`.
-> If you publish signed artifacts, use the two `--certificate-*` flags above so
-> the `OCIRepository` verifies the cosign signature on every pull.
+> longer changes what the cluster runs — connect again to move the pin. You can
+> also connect an immutable digest directly:
+> `cozypkg tap oci://ghcr.io/<org>/n8n@sha256:<64 hex>`.
+
+After connecting, the source is available for installation:
 
 ```sh
 cozypkg list                     # shows cozy-apps.n8n as an available source
