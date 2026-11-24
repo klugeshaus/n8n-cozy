@@ -26,6 +26,7 @@ dropped into the `cozystack/cozystack` source tree as a normal in-tree app.
 
 ```
 README.md                          this deployment guide
+LICENSE                            MIT — free for anyone to use, modify and redistribute
 Makefile                           convenience targets
 .gitignore
 deploy/package.yaml                non-interactive `Package` manifest
@@ -443,3 +444,20 @@ installed. They are kept as YAML-parseable specs and are checked for syntax by
 The ApplicationDefinition's `secrets.include` and `services.include` selectors
 use the same `n8n-{{ .name }}` style, so the Dashboard's Secrets/Services tabs
 show exactly these objects.
+
+---
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 Klugeshaus.
+
+Everyone is free to **use**, **copy**, **modify**, **merge**, **publish**,
+**distribute**, **sub-license** and **sell** copies of this repository and its
+contents, with or without restriction, as long as the above copyright notice
+and permission notice are kept intact. There is no copyleft obligation and no
+attribution required beyond keeping the notice.
+
+This project ships original Helm templates, YAML manifests, JSON Schema and
+scripts; the third-party components it deploys (n8n, `n8nio/runners`, SearXNG)
+are **not** part of this repository and remain under their own upstream
+licenses (n8n's Sustainable Use License, SearXNG AGPL-3.0, and so on).

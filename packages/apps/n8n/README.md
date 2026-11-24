@@ -67,3 +67,7 @@ The deployment guide lives in the top-level repository README; this document is 
 - The SearXNG JSON API is usable with the built-in **HTTP Request** node at `http://<release>-search:8080/search?q=<query>&format=json`; the `SEARXNG_URL` env var hints at the in-cluster base URL when Search is enabled.
 - The optional `n8n-nodes-searxng@0.2.6` community node is archived/MIT and is not built into this chart; install it via `communityPackages`, which requires egress to the npm registry.
 - No `cozy-lib` dependency — the chart is self-contained. The injected `_namespace`/`_cluster` values are optional, so `helm lint` and `helm template` work standalone.
+
+## License
+
+[MIT](../../LICENSE) — Copyright (c) 2026 Klugeshaus. Free to use, modify and redistribute; see the repository root `LICENSE` for the full terms.
