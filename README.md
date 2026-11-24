@@ -124,7 +124,7 @@ your repo has no `origin`, pass `--source` and `--revision` explicitly.
 
 ```sh
 git init
-git remote add origin https://github.com/<org>/n8n-cozy.git
+git remote add origin https://git.klugeshaus.eu/AIStack/n8n-cozy.git
 git add -A
 git commit -m "Add n8n Marketplace app for Cozystack 1.7"
 git tag v1.0.0
@@ -135,7 +135,7 @@ git tag v1.0.0
 ```sh
 cozypkg push oci://ghcr.io/<org>/n8n:v1.0.0 \
   --path . \
-  --source https://github.com/<org>/n8n-cozy.git \
+  --source https://git.klugeshaus.eu/AIStack/n8n-cozy.git \
   --revision v1.0.0 \
   --helm-lint --reproducible
 ```

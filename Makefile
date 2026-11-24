@@ -5,9 +5,9 @@
 
 SHELL := /bin/sh
 
-REGISTRY ?= ghcr.io/YOUR-ORG/n8n
+REGISTRY ?= git.klugeshaus.eu/key/n8n
 TAG      ?= v1.0.0
-SOURCE   ?= https://github.com/YOUR-ORG/n8n-cozy.git
+SOURCE   ?= https://git.klugeshaus.eu/AIStack/n8n-cozy.git
 REF      := $(REGISTRY):$(TAG)
 
 .PHONY: help verify lint template tests generate check-generate validate \
