@@ -1,0 +1,22 @@
+# editors / OS
+.DS_Store
+*~
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# helm
+*.tgz
+charts/*.tgz
+
+# local state
+.omc/
+.env
+.env.*
+!.env.example

@@ -1,0 +1,134 @@
+suite: n8n defaults
+release:
+  name: n8n-test
+  namespace: tenant-test
+tests:
+  - it: renders the main Deployment with a single replica and SQLite defaults
+    template: templates/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: n8n-test
+      - equal:
+          path: spec.replicas
+          value: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DB_TYPE
+            value: sqlite
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: N8N_COMMUNITY_PACKAGES_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENERIC_TIMEZONE
+            value: UTC
+
+  - it: does not wire the task broker or SearXNG when both toggles are off
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: N8N_RUNNERS_MODE
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SEARXNG_URL
+
+  - it: renders the main Service
+    template: templates/service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: n8n-test
+
+  - it: renders the credentials Secret with stable encryption key and runner token
+    template: templates/secret.yaml
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: n8n-test-credentials
+      - isNotEmpty:
+          path: data.N8N_ENCRYPTION_KEY
+      - isNotEmpty:
+          path: data.N8N_RUNNERS_AUTH_TOKEN
+
+  - it: renders the data PersistentVolumeClaim
+    template: templates/pvc.yaml
+    asserts:
+      - isKind:
+          of: PersistentVolumeClaim
+      - equal:
+          path: metadata.name
+          value: n8n-test-data
+      - equal:
+          path: spec.resources.requests.storage
+          value: 10Gi
+      - contains:
+          path: spec.accessModes
+          content: ReadWriteOnce
+
+  - it: renders an HTTPRoute when the tenant exposes a Gateway
+    template: templates/httproute.yaml
+    set:
+      _namespace.gateway: cozy-system
+    asserts:
+      - isKind:
+          of: HTTPRoute
+      - equal:
+          path: metadata.name
+          value: n8n-test
+      - equal:
+          path: spec.parentRefs[0].namespace
+          value: cozy-system
+
+  - it: renders the Ingress resource when no Gateway is configured
+    template: templates/ingress.yaml
+    asserts:
+      - isKind:
+          of: Ingress
+      - isNotEmpty:
+          path: metadata.name
+
+  - it: renders no Ingress when a Gateway is configured
+    template: templates/ingress.yaml
+    set:
+      _namespace.gateway: cozy-system
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no HTTPRoute without a Gateway
+    template: templates/httproute.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the dashboard resource map (Role, RoleBinding, WorkloadMonitor)
+    template: templates/dashboard-resourcemap.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: renders no task runner resources when the Code Sandbox is disabled
+    template: templates/sandbox.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no SearXNG resources when Search is disabled
+    template: templates/search.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

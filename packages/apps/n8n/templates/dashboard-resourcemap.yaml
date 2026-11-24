@@ -1,0 +1,66 @@
+{{/*
+  Dashboard resource map. Cozystack's dashboard reads the tenant's Services,
+  Secrets and WorkloadMonitors through the tenant's own credentials, so each
+  app grants a narrow Role + RoleBinding. `n8n.rbac.subjects` is a local,
+  dependency-free equivalent of cozy-lib.rbac.subjectsForTenantAndAccessLevel.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-dashboard-resources
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames:
+      - {{ .Release.Name | quote }}
+      {{- if .Values.sandbox.enabled }}
+      - {{ printf "%s-broker" .Release.Name | quote }}
+      {{- end }}
+      {{- if .Values.search.enabled }}
+      - {{ printf "%s-search" .Release.Name | quote }}
+      {{- end }}
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ printf "%s-credentials" .Release.Name | quote }}
+      {{- if .Values.search.enabled }}
+      - {{ printf "%s-search-config" .Release.Name | quote }}
+      {{- end }}
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["cozystack.io"]
+    resources: ["workloadmonitors"]
+    resourceNames:
+      - {{ .Release.Name | quote }}
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-dashboard-resources
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-dashboard-resources
+subjects:
+  {{- include "n8n.rbac.subjects" .Release.Namespace | nindent 2 }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
+spec:
+  minReplicas: 1
+  replicas: 1
+  kind: n8n
+  type: n8n
+  selector:
+    {{- include "n8n.mainSelectorLabels" . | nindent 4 }}
+  version: {{ .Chart.Version | quote }}

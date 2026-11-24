@@ -1,0 +1,135 @@
+{{/*
+  Search — private in-cluster SearXNG metasearch engine.
+
+  The JSON API is explicitly enabled (search.formats: [html, json]); without
+  `json` the n8n HTTP Request node would receive HTML and could not parse the
+  results. SearXNG is reachable from n8n at http://<release>-search:8080 and
+  is NOT exposed outside the cluster.
+
+  SEARXNG_SECRET is generated once and preserved via lookup, so an upgrade
+  does not rotate the instance's secret key. The same value is embedded in
+  settings.yml so the file and the Secret always agree.
+*/}}
+{{- if .Values.search.enabled }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace (printf "%s-search-config" .Release.Name) }}
+{{- $secret := "" }}
+{{- if and $existing $existing.data }}
+{{- $secret = index $existing.data "SEARXNG_SECRET" | default "" | b64dec }}
+{{- end }}
+{{- if not $secret }}
+{{- $secret = randAlphaNum 32 }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-search-config
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: search
+type: Opaque
+data:
+  SEARXNG_SECRET: {{ $secret | b64enc | quote }}
+stringData:
+  settings.yml: |-
+    use_default_settings: true
+    server:
+      secret_key: {{ $secret | quote }}
+      limiter: false
+      image_proxy: true
+      method: GET
+      bind_address: "0.0.0.0"
+      port: 8080
+    search:
+      formats:
+        - html
+        - json
+      safe_search: 0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-search
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: search
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "n8n.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: search
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-search
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: search
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "n8n.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: search
+  template:
+    metadata:
+      labels:
+        {{- include "n8n.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: search
+        workloads.cozystack.io/resource-preset: {{ .Values.search.resourcesPreset | quote }}
+    spec:
+      securityContext:
+        fsGroup: 977
+      containers:
+        - name: searxng
+          image: {{ printf "%s:%s" .Values.search.image.repository .Values.search.image.tag | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: SEARXNG_BASE_URL
+              value: {{ printf "http://%s-search:8080/" .Release.Name | quote }}
+            - name: SEARXNG_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-search-config
+                  key: SEARXNG_SECRET
+          volumeMounts:
+            - name: config
+              mountPath: /etc/searxng/settings.yml
+              subPath: settings.yml
+              readOnly: true
+            - name: cache
+              mountPath: /var/cache/searxng
+          resources:
+            {{- include "n8n.resources" (dict "preset" .Values.search.resourcesPreset "explicit" .Values.search.resources) | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ .Release.Name }}-search-config
+        - name: cache
+          emptyDir: {}
+{{- end }}

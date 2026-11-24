@@ -1,0 +1,57 @@
+{{/*
+  Classic Ingress fallback, rendered whenever no Gateway API namespace is
+  configured (including a standalone `helm template`). All Cozystack-injected
+  values are optional so the chart lints and renders on its own.
+*/}}
+{{- $ns := .Values._namespace | default dict }}
+{{- $cluster := .Values._cluster | default dict }}
+{{- $gateway := $ns.gateway | default "" }}
+{{- if not $gateway }}
+{{- $host := include "n8n.host" . }}
+{{- $ingress := $ns.ingress | default "" }}
+{{- $solver := $cluster.solver | default "" }}
+{{- $wildcard := index $cluster "wildcard-secret-name" | default "" }}
+{{- $issuer := index $cluster "issuer-name" | default "letsencrypt-prod" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-ingress
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    {{- if not $wildcard }}
+    cert-manager.io/cluster-issuer: {{ $issuer | quote }}
+    {{- if and (eq $solver "http01") $ingress }}
+    acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress | quote }}
+    {{- end }}
+    {{- end }}
+spec:
+  {{- if $ingress }}
+  ingressClassName: {{ $ingress | quote }}
+  {{- end }}
+  {{/* Always keep the tls section: it enforces the HTTP-to-HTTPS redirect.
+       With a wildcard cert the ingress controller already owns the secret,
+       so only secretName is omitted (upstream harbor pattern). */}}
+  tls:
+    - hosts:
+        - {{ $host | quote }}
+      {{- if not $wildcard }}
+      secretName: {{ .Release.Name }}-ingress-tls
+      {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}
+                port:
+                  number: 80
+{{- end }}

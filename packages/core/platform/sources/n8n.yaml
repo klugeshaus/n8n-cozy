@@ -1,0 +1,32 @@
+---
+# External-Apps PackageSource for Cozystack 1.7 (v1.7.1).
+#
+# `cozypkg tap` rewrites spec.sourceRef to the OCIRepository it creates in
+# cozy-system and materialises this PackageSource under its declared name.
+# `cozypkg add cozy-apps.n8n` creates the Package that installs the
+# `n8n-rd` component (the ApplicationDefinition) into cozy-system. The
+# `n8n` component itself carries no `install:` block: it is consumed only as
+# an ExternalArtifact through ApplicationDefinition.spec.release.chartRef.
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozy-apps.n8n
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: n8n-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.cozystack-engine
+      components:
+        - name: n8n
+          path: apps/n8n
+        - name: n8n-rd
+          path: system/n8n-rd
+          install:
+            namespace: cozy-system
+            releaseName: n8n-rd

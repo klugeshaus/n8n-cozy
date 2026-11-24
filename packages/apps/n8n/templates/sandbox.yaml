@@ -1,0 +1,88 @@
+{{/*
+  Code Sandbox — n8n external task runners.
+
+  The task broker runs *inside* the n8n main container (N8N_RUNNERS_MODE=external,
+  N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0). This file exposes it through a
+  ClusterIP Service and runs n8nio/runners as a separate Deployment that
+  connects back over the cluster network. This is the same topology as the
+  official n8n docker-compose stacks (http://n8n:5679); the official Helm
+  chart uses a pod sidecar over localhost instead. Both are supported.
+
+  The runner image tag is always .Values.image.tag: n8n requires exact version
+  parity between the broker and its runners.
+*/}}
+{{- if .Values.sandbox.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-broker
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: task-broker
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "n8n.mainSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: broker
+      port: 5679
+      targetPort: broker
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-runner
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: task-runner
+spec:
+  replicas: {{ .Values.sandbox.replicas }}
+  selector:
+    matchLabels:
+      {{- include "n8n.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: task-runner
+  template:
+    metadata:
+      labels:
+        {{- include "n8n.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: task-runner
+        workloads.cozystack.io/resource-preset: {{ .Values.sandbox.resourcesPreset | quote }}
+    spec:
+      containers:
+        - name: runner
+          image: {{ printf "%s:%s" .Values.sandbox.imageRepository .Values.image.tag | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: health
+              containerPort: 5680
+              protocol: TCP
+          env:
+            - name: N8N_RUNNERS_TASK_BROKER_URI
+              value: {{ printf "http://%s-broker:5679" .Release.Name | quote }}
+            - name: N8N_RUNNERS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-credentials
+                  key: N8N_RUNNERS_AUTH_TOKEN
+            - name: N8N_RUNNERS_AUTO_SHUTDOWN_TIMEOUT
+              value: "15"
+            - name: N8N_RUNNERS_LAUNCHER_LOG_LEVEL
+              value: "info"
+          resources:
+            {{- include "n8n.resources" (dict "preset" .Values.sandbox.resourcesPreset "explicit" .Values.sandbox.resources) | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+{{- end }}

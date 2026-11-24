@@ -1,0 +1,125 @@
+##
+## @section Common parameters
+##
+
+## @param {string} [host] - Fully-qualified hostname for n8n. Leave empty to use the tenant apex domain (<release>.<tenant-host>).
+host: ""
+
+## @param {quantity} size - Size of the persistent volume that stores n8n workflows, credentials and execution data.
+size: 10Gi
+
+## @param {string} storageClass - StorageClass used for the n8n data volume. Empty uses the cluster default.
+## @immutable
+## @x-cozystack-options {source: storageclass}
+storageClass: ""
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration.
+## @field {quantity} [cpu] - CPU available to the container.
+## @field {quantity} [memory] - Memory (RAM) available to the container.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {Resources} [resources] - Explicit CPU/memory overrides. When omitted, `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="t1.small" - Default sizing preset for the n8n container.
+resourcesPreset: "t1.small"
+
+## @param {string} timezone - Timezone used by n8n for scheduled workflows (IANA name).
+timezone: UTC
+
+## @typedef {struct} Image - Container image settings.
+## @field {string} repository - Image repository.
+## @field {string} tag - Image tag. n8n 2.13.0 or newer is required for the Code Sandbox task runners.
+
+## @param {Image} image - n8n main container image.
+image:
+  repository: docker.n8n.io/n8nio/n8n
+  tag: "2.48.5"
+
+## @param {string} communityPackages - JSON array of npm community packages reconciled by n8n on startup, e.g. `[{"name":"n8n-nodes-searxng","version":"0.2.6"}]`. Requires egress to the npm registry. Leave empty to install nodes from the n8n UI instead.
+communityPackages: ""
+
+##
+## @section Code Sandbox (external task runners)
+##
+
+## @typedef {struct} Sandbox - Optional n8n external task runners (JavaScript/Python Code node sandbox).
+## @field {bool} enabled - Deploy the task-runner Deployment and wire the n8n task broker.
+## @field {int} replicas - Number of task-runner replicas.
+## @field {string} imageRepository - Runner image repository; the tag always follows `image.tag` so versions cannot diverge.
+## @field {ResourcesPreset} resourcesPreset - Sizing preset for each runner replica.
+## @field {Resources} resources - Explicit CPU/memory overrides for each runner replica.
+
+## @param {Sandbox} sandbox - Code Sandbox toggle. Disabled by default; enabling deploys `n8nio/runners` alongside n8n.
+sandbox:
+  enabled: false
+  replicas: 1
+  imageRepository: n8nio/runners
+  resourcesPreset: "t1.nano"
+  resources: {}
+
+##
+## @section Search (SearXNG)
+##
+
+## @typedef {struct} Search - Optional in-cluster SearXNG metasearch engine with the JSON API enabled.
+## @field {bool} enabled - Deploy SearXNG and expose it to n8n at http://<release>-search:8080.
+## @field {Image} image - SearXNG image.
+## @field {ResourcesPreset} resourcesPreset - Sizing preset for the SearXNG container.
+
+## @param {Search} search - Search toggle. Disabled by default; enabling deploys a private SearXNG instance.
+search:
+  enabled: false
+  image:
+    repository: searxng/searxng
+    tag: "2026.11.15-2d500cb6b"
+  resourcesPreset: "t1.nano"
+  resources: {}

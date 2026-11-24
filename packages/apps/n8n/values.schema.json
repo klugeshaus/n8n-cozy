@@ -1,0 +1,228 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "host": {
+      "description": "Fully-qualified hostname for n8n. Leave empty to use the tenant apex domain (<release>.<tenant-host>).",
+      "type": "string",
+      "default": ""
+    },
+    "size": {
+      "description": "Size of the persistent volume that stores n8n workflows, credentials and execution data.",
+      "default": "10Gi",
+      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+      "anyOf": [
+        { "type": "integer" },
+        { "type": "string" }
+      ],
+      "x-kubernetes-int-or-string": true
+    },
+    "storageClass": {
+      "description": "StorageClass used for the n8n data volume. Empty uses the cluster default.",
+      "type": "string",
+      "default": "",
+      "x-kubernetes-validations": [
+        {
+          "rule": "self == oldSelf",
+          "message": "storageClass is immutable"
+        }
+      ],
+      "x-cozystack-options": {
+        "source": "storageclass"
+      }
+    },
+    "resources": {
+      "description": "Explicit CPU/memory overrides. When omitted, `resourcesPreset` is applied.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "cpu": {
+          "description": "CPU available to the container.",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            { "type": "integer" },
+            { "type": "string" }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
+        "memory": {
+          "description": "Memory (RAM) available to the container.",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            { "type": "integer" },
+            { "type": "string" }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "resourcesPreset": {
+      "description": "Default sizing preset for the n8n container.",
+      "type": "string",
+      "default": "t1.small",
+      "enum": [
+        "t1.nano", "t1.micro", "t1.small", "t1.medium", "t1.large", "t1.xlarge", "t1.2xlarge", "t1.4xlarge",
+        "c1.nano", "c1.micro", "c1.small", "c1.medium", "c1.large", "c1.xlarge", "c1.2xlarge", "c1.4xlarge",
+        "s1.nano", "s1.micro", "s1.small", "s1.medium", "s1.large", "s1.xlarge", "s1.2xlarge", "s1.4xlarge",
+        "u1.nano", "u1.micro", "u1.small", "u1.medium", "u1.large", "u1.xlarge", "u1.2xlarge", "u1.4xlarge",
+        "m1.nano", "m1.micro", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m1.2xlarge", "m1.4xlarge",
+        "nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"
+      ]
+    },
+    "timezone": {
+      "description": "Timezone used by n8n for scheduled workflows (IANA name).",
+      "type": "string",
+      "default": "UTC"
+    },
+    "image": {
+      "description": "n8n main container image. n8n 2.13.0 or newer is required for the Code Sandbox task runners.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "repository": {
+          "description": "Image repository.",
+          "type": "string",
+          "default": "docker.n8n.io/n8nio/n8n"
+        },
+        "tag": {
+          "description": "Image tag. Also used for the Code Sandbox runner image so versions cannot diverge. n8n >= 2.13.0 is required when the Code Sandbox is enabled.",
+          "type": "string",
+          "default": "2.48.5"
+        }
+      }
+    },
+    "communityPackages": {
+      "description": "JSON array of npm community packages reconciled by n8n on startup, e.g. [{\"name\":\"n8n-nodes-searxng\",\"version\":\"0.2.6\"}]. Requires egress to the npm registry. Leave empty to install nodes from the n8n UI instead.",
+      "type": "string",
+      "default": ""
+    },
+    "sandbox": {
+      "description": "Code Sandbox: optional n8n external task runners for the JavaScript/Python Code node. Disabled by default.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": {
+          "description": "Deploy the task-runner Deployment and wire the n8n task broker.",
+          "type": "boolean",
+          "default": false
+        },
+        "replicas": {
+          "description": "Number of task-runner replicas.",
+          "type": "integer",
+          "default": 1,
+          "minimum": 1
+        },
+        "imageRepository": {
+          "description": "Runner image repository. The tag always follows `image.tag`, so the n8n and runner versions cannot diverge.",
+          "type": "string",
+          "default": "n8nio/runners"
+        },
+        "resourcesPreset": {
+          "description": "Sizing preset for each runner replica.",
+          "type": "string",
+          "default": "t1.nano",
+          "enum": [
+            "t1.nano", "t1.micro", "t1.small", "t1.medium", "t1.large", "t1.xlarge", "t1.2xlarge", "t1.4xlarge",
+            "c1.nano", "c1.micro", "c1.small", "c1.medium", "c1.large", "c1.xlarge", "c1.2xlarge", "c1.4xlarge",
+            "s1.nano", "s1.micro", "s1.small", "s1.medium", "s1.large", "s1.xlarge", "s1.2xlarge", "s1.4xlarge",
+            "u1.nano", "u1.micro", "u1.small", "u1.medium", "u1.large", "u1.xlarge", "u1.2xlarge", "u1.4xlarge",
+            "m1.nano", "m1.micro", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m1.2xlarge", "m1.4xlarge",
+            "nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"
+          ]
+        },
+        "resources": {
+          "description": "Explicit CPU/memory overrides for each runner replica.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "CPU available to each runner replica.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                { "type": "integer" },
+                { "type": "string" }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Memory (RAM) available to each runner replica.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                { "type": "integer" },
+                { "type": "string" }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        }
+      }
+    },
+    "search": {
+      "description": "Search: optional in-cluster SearXNG metasearch engine with the JSON API enabled. Disabled by default.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": {
+          "description": "Deploy SearXNG and expose it to n8n at http://<release>-search:8080.",
+          "type": "boolean",
+          "default": false
+        },
+        "image": {
+          "description": "SearXNG image.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "repository": {
+              "description": "Image repository.",
+              "type": "string",
+              "default": "searxng/searxng"
+            },
+            "tag": {
+              "description": "Image tag.",
+              "type": "string",
+              "default": "2026.11.15-2d500cb6b"
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Sizing preset for the SearXNG container.",
+          "type": "string",
+          "default": "t1.nano",
+          "enum": [
+            "t1.nano", "t1.micro", "t1.small", "t1.medium", "t1.large", "t1.xlarge", "t1.2xlarge", "t1.4xlarge",
+            "c1.nano", "c1.micro", "c1.small", "c1.medium", "c1.large", "c1.xlarge", "c1.2xlarge", "c1.4xlarge",
+            "s1.nano", "s1.micro", "s1.small", "s1.medium", "s1.large", "s1.xlarge", "s1.2xlarge", "s1.4xlarge",
+            "u1.nano", "u1.micro", "u1.small", "u1.medium", "u1.large", "u1.xlarge", "u1.2xlarge", "u1.4xlarge",
+            "m1.nano", "m1.micro", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m1.2xlarge", "m1.4xlarge",
+            "nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"
+          ]
+        },
+        "resources": {
+          "description": "Explicit CPU/memory overrides for the SearXNG container.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "CPU available to the SearXNG container.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                { "type": "integer" },
+                { "type": "string" }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Memory (RAM) available to the SearXNG container.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                { "type": "integer" },
+                { "type": "string" }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

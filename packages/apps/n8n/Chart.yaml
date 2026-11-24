@@ -1,0 +1,13 @@
+apiVersion: v2
+# The Marketplace card icon is supplied by the ApplicationDefinition's
+# spec.dashboard.icon (base64 SVG), not by Chart.yaml. Helm 3.13 rejects the
+# relative `/logos/...` icon path as an invalid URL during `helm lint`, so we
+# deliberately omit it here to keep `cozypkg validate --helm-lint` clean.
+name: n8n
+description: n8n workflow automation with optional Code Sandbox and SearXNG Search
+type: application
+# Unlike the in-tree Cozystack build (which rewrites versions), an external
+# repo is published verbatim by `cozypkg push` / `flux push artifact`, so the
+# chart version must be real here. Bump it on every release/tag.
+version: 1.0.0
+appVersion: "2.48.5"

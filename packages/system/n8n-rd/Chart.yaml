@@ -1,0 +1,7 @@
+apiVersion: v2
+name: n8n-rd
+description: n8n application resource definition for the Cozystack Marketplace
+type: application
+# cozypkg push publishes this chart verbatim; external repos need a real
+# chart version rather than the in-tree build placeholder.
+version: 1.0.0

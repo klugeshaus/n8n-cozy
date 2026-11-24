@@ -1,0 +1,19 @@
+---
+# Non-interactive install manifest for `cozypkg add -f deploy/package.yaml`
+# (or `kubectl apply -f deploy/package.yaml`).
+#
+# `cozypkg tap` only connects the repository: it materialises the
+# `cozy-apps.n8n` PackageSource but installs nothing. The `Package` CR below is
+# what actually installs the `n8n-rd` component, which renders the
+# ApplicationDefinition into cozy-system and puts the n8n card in the
+# Marketplace. The `n8n` app component itself is consumed as an ExternalArtifact
+# through ApplicationDefinition.spec.release.chartRef.
+#
+# Package name MUST equal the PackageSource name declared in
+# packages/core/platform/sources/n8n.yaml.
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozy-apps.n8n
+spec:
+  variant: default
