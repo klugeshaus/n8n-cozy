@@ -380,6 +380,16 @@
             "tolerations": {
               "description": "Tolerations for the Sysbox taint (defaults to the upstream sysbox-runtime=not-running toleration).",
               "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "key": { "type": "string" },
+                  "operator": { "type": "string" },
+                  "value": { "type": "string" },
+                  "effect": { "type": "string" },
+                  "tolerationSeconds": { "type": "integer" }
+                }
+              },
               "default": [
                 {
                   "key": "sysbox-runtime",
