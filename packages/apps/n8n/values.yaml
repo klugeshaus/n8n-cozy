@@ -77,7 +77,7 @@ timezone: UTC
 
 ## @typedef {struct} Image - Container image settings.
 ## @field {string} repository - Image repository.
-## @field {string} tag - Image tag. n8n 2.13.0 or newer is required for the Code Sandbox task runners.
+## @field {string} tag - Image tag. n8n 2.16.0 or newer is required for the Code Sandbox (sandbox service) integration.
 
 ## @param {Image} image - n8n main container image.
 image:
@@ -88,23 +88,75 @@ image:
 communityPackages: ""
 
 ##
-## @section Code Sandbox (external task runners)
+## @section Code Sandbox (n8n sandbox service)
 ##
 
-## @typedef {struct} Sandbox - Optional n8n external task runners (JavaScript/Python Code node sandbox).
-## @field {bool} enabled - Deploy the task-runner Deployment and wire the n8n task broker.
-## @field {int} replicas - Number of task-runner replicas.
-## @field {string} imageRepository - Runner image repository; the tag always follows `image.tag` so versions cannot diverge.
+## @typedef {struct} SandboxImage - Container image for one sandbox component. All three images share the sandbox service release number.
+## @field {string} repository - Image repository.
+## @field {string} tag - Image tag.
+
+## @typedef {struct} SandboxApi - The sandbox service API. n8n talks to it over plain HTTP; it owns the store and the runner fleet.
+## @field {SandboxImage} image - API image.
+## @field {int} replicas - Must stay 1: the default store is SQLite.
+## @field {ResourcesPreset} resourcesPreset - Sizing preset for the API container.
+## @field {Resources} resources - Explicit CPU/memory overrides for the API container.
+
+## @typedef {struct} SandboxRunner - Sysbox runners that execute the generated code. Sysbox itself is installed once on a dedicated node pool (cluster prerequisite, see README).
+## @field {bool} enabled - Deploy the runner StatefulSet and its headless Service.
+## @field {string} isolation - `sysbox` (recommended; needs Sysbox on the node) or `privileged` (needed on immutable-rootfs distributions such as Talos).
+## @field {bool} acknowledgePrivileged - Required to render `isolation: privileged`; confirms the namespace admits privileged pods.
+## @field {SandboxImage} image - Runner (docker-in-docker) image.
+## @field {SandboxImage} sandboxImage - Image each sandbox container runs from.
+## @field {int} replicas - Number of runner replicas.
+## @field {string} capacityTotal - Maximum concurrent sandboxes per runner. Mandatory; size it for your node pool.
+## @field {quantity} dataRootSizeLimit - Size limit of the runner's scratch `emptyDir`.
+## @field {object} nodeSelector - Node selector for the runner pods (defaults to `sysbox-install: "yes"`).
+## @field {array} tolerations - Tolerations for the Sysbox taint (defaults to the upstream `sysbox-runtime=not-running` toleration).
 ## @field {ResourcesPreset} resourcesPreset - Sizing preset for each runner replica.
 ## @field {Resources} resources - Explicit CPU/memory overrides for each runner replica.
 
-## @param {Sandbox} sandbox - Code Sandbox toggle. Disabled by default; enabling deploys `n8nio/runners` alongside n8n.
+## @param {Sandbox} sandbox - Code Sandbox toggle. Disabled by default; enabling deploys the n8n sandbox service API and runners next to n8n and points n8n at it.
 sandbox:
   enabled: false
-  replicas: 1
-  imageRepository: n8nio/runners
-  resourcesPreset: "t1.nano"
-  resources: {}
+
+  ## @param {string} apiKey - Admin API key shared with the sandbox API. Empty generates one and preserves it across upgrades. The same value is written to `SANDBOX_API_KEYS` and to n8n's `N8N_SANDBOX_SERVICE_API_KEY`, so the two can never drift.
+  apiKey: ""
+
+  ## @param {string} runnerRegistrationToken - Token the runners use to register with the API. Empty generates one and preserves it across upgrades.
+  runnerRegistrationToken: ""
+
+  ## @param {SandboxApi} api - Sandbox service API.
+  api:
+    image:
+      repository: n8nio/n8n-sandbox-service-api
+      tag: "1.16.0"
+    replicas: 1
+    resourcesPreset: "t1.small"
+    resources: {}
+
+  ## @param {SandboxRunner} runner - Sysbox sandbox runners.
+  runner:
+    enabled: true
+    isolation: sysbox
+    acknowledgePrivileged: false
+    image:
+      repository: n8nio/n8n-sandbox-service-runner-dind
+      tag: "1.16.0"
+    sandboxImage:
+      repository: n8nio/n8n-sandbox-service-sandbox
+      tag: "1.16.0"
+    replicas: 1
+    capacityTotal: "100"
+    dataRootSizeLimit: 64Gi
+    nodeSelector:
+      sysbox-install: "yes"
+    tolerations:
+      - key: sysbox-runtime
+        operator: Equal
+        value: not-running
+        effect: NoSchedule
+    resourcesPreset: "t1.medium"
+    resources: {}
 
 ##
 ## @section Search (SearXNG)

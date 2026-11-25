@@ -16,7 +16,10 @@ rules:
     resourceNames:
       - {{ .Release.Name | quote }}
       {{- if .Values.sandbox.enabled }}
-      - {{ printf "%s-broker" .Release.Name | quote }}
+      - {{ printf "%s-sandbox" .Release.Name | quote }}
+      {{- if .Values.sandbox.runner.enabled }}
+      - {{ printf "%s-sandbox-runner" .Release.Name | quote }}
+      {{- end }}
       {{- end }}
       {{- if .Values.search.enabled }}
       - {{ printf "%s-search" .Release.Name | quote }}
@@ -26,6 +29,10 @@ rules:
     resources: ["secrets"]
     resourceNames:
       - {{ printf "%s-credentials" .Release.Name | quote }}
+      {{- if .Values.sandbox.enabled }}
+      - {{ printf "%s-sandbox-auth" .Release.Name | quote }}
+      - {{ printf "%s-sandbox-ca" .Release.Name | quote }}
+      {{- end }}
       {{- if .Values.search.enabled }}
       - {{ printf "%s-search-config" .Release.Name | quote }}
       {{- end }}

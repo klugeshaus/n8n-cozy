@@ -30,13 +30,13 @@ tests:
             name: GENERIC_TIMEZONE
             value: UTC
 
-  - it: does not wire the task broker or SearXNG when both toggles are off
+  - it: does not wire the sandbox service or SearXNG when both toggles are off
     template: templates/deployment.yaml
     asserts:
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
-            name: N8N_RUNNERS_MODE
+            name: N8N_INSTANCE_AI_SANDBOX_ENABLED
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
@@ -51,7 +51,7 @@ tests:
           path: metadata.name
           value: n8n-test
 
-  - it: renders the credentials Secret with stable encryption key and runner token
+  - it: renders the credentials Secret with stable encryption key and sandbox API key
     template: templates/secret.yaml
     asserts:
       - isKind:
@@ -62,7 +62,7 @@ tests:
       - isNotEmpty:
           path: data.N8N_ENCRYPTION_KEY
       - isNotEmpty:
-          path: data.N8N_RUNNERS_AUTH_TOKEN
+          path: data.SANDBOX_API_KEY
 
   - it: renders the data PersistentVolumeClaim
     template: templates/pvc.yaml
@@ -121,7 +121,7 @@ tests:
       - hasDocuments:
           count: 3
 
-  - it: renders no task runner resources when the Code Sandbox is disabled
+  - it: renders no sandbox service resources when the Code Sandbox is disabled
     template: templates/sandbox.yaml
     asserts:
       - hasDocuments:

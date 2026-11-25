@@ -12,8 +12,12 @@
       "default": "10Gi",
       "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
       "anyOf": [
-        { "type": "integer" },
-        { "type": "string" }
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
       ],
       "x-kubernetes-int-or-string": true
     },
@@ -40,8 +44,12 @@
           "description": "CPU available to the container.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
-            { "type": "integer" },
-            { "type": "string" }
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
           ],
           "x-kubernetes-int-or-string": true
         },
@@ -49,8 +57,12 @@
           "description": "Memory (RAM) available to the container.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
-            { "type": "integer" },
-            { "type": "string" }
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
           ],
           "x-kubernetes-int-or-string": true
         }
@@ -61,12 +73,53 @@
       "type": "string",
       "default": "t1.small",
       "enum": [
-        "t1.nano", "t1.micro", "t1.small", "t1.medium", "t1.large", "t1.xlarge", "t1.2xlarge", "t1.4xlarge",
-        "c1.nano", "c1.micro", "c1.small", "c1.medium", "c1.large", "c1.xlarge", "c1.2xlarge", "c1.4xlarge",
-        "s1.nano", "s1.micro", "s1.small", "s1.medium", "s1.large", "s1.xlarge", "s1.2xlarge", "s1.4xlarge",
-        "u1.nano", "u1.micro", "u1.small", "u1.medium", "u1.large", "u1.xlarge", "u1.2xlarge", "u1.4xlarge",
-        "m1.nano", "m1.micro", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m1.2xlarge", "m1.4xlarge",
-        "nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"
+        "t1.nano",
+        "t1.micro",
+        "t1.small",
+        "t1.medium",
+        "t1.large",
+        "t1.xlarge",
+        "t1.2xlarge",
+        "t1.4xlarge",
+        "c1.nano",
+        "c1.micro",
+        "c1.small",
+        "c1.medium",
+        "c1.large",
+        "c1.xlarge",
+        "c1.2xlarge",
+        "c1.4xlarge",
+        "s1.nano",
+        "s1.micro",
+        "s1.small",
+        "s1.medium",
+        "s1.large",
+        "s1.xlarge",
+        "s1.2xlarge",
+        "s1.4xlarge",
+        "u1.nano",
+        "u1.micro",
+        "u1.small",
+        "u1.medium",
+        "u1.large",
+        "u1.xlarge",
+        "u1.2xlarge",
+        "u1.4xlarge",
+        "m1.nano",
+        "m1.micro",
+        "m1.small",
+        "m1.medium",
+        "m1.large",
+        "m1.xlarge",
+        "m1.2xlarge",
+        "m1.4xlarge",
+        "nano",
+        "micro",
+        "small",
+        "medium",
+        "large",
+        "xlarge",
+        "2xlarge"
       ]
     },
     "timezone": {
@@ -75,7 +128,7 @@
       "default": "UTC"
     },
     "image": {
-      "description": "n8n main container image. n8n 2.13.0 or newer is required for the Code Sandbox task runners.",
+      "description": "n8n main container image. n8n 2.16.0 or newer is required for the Code Sandbox (sandbox service) integration.",
       "type": "object",
       "default": {},
       "properties": {
@@ -85,7 +138,7 @@
           "default": "docker.n8n.io/n8nio/n8n"
         },
         "tag": {
-          "description": "Image tag. Also used for the Code Sandbox runner image so versions cannot diverge. n8n >= 2.13.0 is required when the Code Sandbox is enabled.",
+          "description": "Image tag. n8n >= 2.16.0 is required when the Code Sandbox is enabled.",
           "type": "string",
           "default": "2.48.5"
         }
@@ -97,61 +150,331 @@
       "default": ""
     },
     "sandbox": {
-      "description": "Code Sandbox: optional n8n external task runners for the JavaScript/Python Code node. Disabled by default.",
+      "description": "Code Sandbox: optional n8n sandbox service (API + Sysbox runners) for the Code node and AI agent tooling. Disabled by default.",
       "type": "object",
       "default": {},
       "properties": {
         "enabled": {
-          "description": "Deploy the task-runner Deployment and wire the n8n task broker.",
+          "description": "Deploy the sandbox service API and runners and point n8n at it.",
           "type": "boolean",
           "default": false
         },
-        "replicas": {
-          "description": "Number of task-runner replicas.",
-          "type": "integer",
-          "default": 1,
-          "minimum": 1
-        },
-        "imageRepository": {
-          "description": "Runner image repository. The tag always follows `image.tag`, so the n8n and runner versions cannot diverge.",
+        "apiKey": {
+          "description": "Admin API key shared with the sandbox API. Empty generates one and preserves it across upgrades. The same value is written to SANDBOX_API_KEYS and to n8n N8N_SANDBOX_SERVICE_API_KEY, so the two can never drift.",
           "type": "string",
-          "default": "n8nio/runners"
+          "default": ""
         },
-        "resourcesPreset": {
-          "description": "Sizing preset for each runner replica.",
+        "runnerRegistrationToken": {
+          "description": "Token the runners use to register with the API. Empty generates one and preserves it across upgrades.",
           "type": "string",
-          "default": "t1.nano",
-          "enum": [
-            "t1.nano", "t1.micro", "t1.small", "t1.medium", "t1.large", "t1.xlarge", "t1.2xlarge", "t1.4xlarge",
-            "c1.nano", "c1.micro", "c1.small", "c1.medium", "c1.large", "c1.xlarge", "c1.2xlarge", "c1.4xlarge",
-            "s1.nano", "s1.micro", "s1.small", "s1.medium", "s1.large", "s1.xlarge", "s1.2xlarge", "s1.4xlarge",
-            "u1.nano", "u1.micro", "u1.small", "u1.medium", "u1.large", "u1.xlarge", "u1.2xlarge", "u1.4xlarge",
-            "m1.nano", "m1.micro", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m1.2xlarge", "m1.4xlarge",
-            "nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"
-          ]
+          "default": ""
         },
-        "resources": {
-          "description": "Explicit CPU/memory overrides for each runner replica.",
+        "api": {
+          "description": "Sandbox service API.",
           "type": "object",
           "default": {},
           "properties": {
-            "cpu": {
-              "description": "CPU available to each runner replica.",
+            "image": {
+              "description": "API image. All three sandbox images share the service release number.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "repository": {
+                  "description": "Image repository.",
+                  "type": "string",
+                  "default": "n8nio/n8n-sandbox-service-api"
+                },
+                "tag": {
+                  "description": "Image tag.",
+                  "type": "string",
+                  "default": "1.16.0"
+                }
+              }
+            },
+            "replicas": {
+              "description": "Must stay 1: the default store is SQLite.",
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 1
+            },
+            "resourcesPreset": {
+              "description": "Sizing preset for the API container.",
+              "type": "string",
+              "default": "t1.small",
+              "enum": [
+                "t1.nano",
+                "t1.micro",
+                "t1.small",
+                "t1.medium",
+                "t1.large",
+                "t1.xlarge",
+                "t1.2xlarge",
+                "t1.4xlarge",
+                "c1.nano",
+                "c1.micro",
+                "c1.small",
+                "c1.medium",
+                "c1.large",
+                "c1.xlarge",
+                "c1.2xlarge",
+                "c1.4xlarge",
+                "s1.nano",
+                "s1.micro",
+                "s1.small",
+                "s1.medium",
+                "s1.large",
+                "s1.xlarge",
+                "s1.2xlarge",
+                "s1.4xlarge",
+                "u1.nano",
+                "u1.micro",
+                "u1.small",
+                "u1.medium",
+                "u1.large",
+                "u1.xlarge",
+                "u1.2xlarge",
+                "u1.4xlarge",
+                "m1.nano",
+                "m1.micro",
+                "m1.small",
+                "m1.medium",
+                "m1.large",
+                "m1.xlarge",
+                "m1.2xlarge",
+                "m1.4xlarge",
+                "nano",
+                "micro",
+                "small",
+                "medium",
+                "large",
+                "xlarge",
+                "2xlarge"
+              ]
+            },
+            "resources": {
+              "description": "Explicit CPU/memory overrides.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "CPU available to the API container.",
+                  "pattern": "^(\\\\+|-)?(([0-9]+(\\\\.[0-9]*)?)|(\\\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\\\+|-)?(([0-9]+(\\\\.[0-9]*)?)|(\\\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory (RAM) available to the API container.",
+                  "pattern": "^(\\\\+|-)?(([0-9]+(\\\\.[0-9]*)?)|(\\\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\\\+|-)?(([0-9]+(\\\\.[0-9]*)?)|(\\\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        },
+        "runner": {
+          "description": "Sysbox runners that execute the generated code. Sysbox itself is installed once on a dedicated node pool (cluster prerequisite, see README).",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "enabled": {
+              "description": "Deploy the runner StatefulSet and its headless Service.",
+              "type": "boolean",
+              "default": true
+            },
+            "isolation": {
+              "description": "sysbox (recommended; needs Sysbox on the node) or privileged (needed on immutable-rootfs distributions such as Talos).",
+              "type": "string",
+              "default": "sysbox",
+              "enum": [
+                "sysbox",
+                "privileged"
+              ]
+            },
+            "acknowledgePrivileged": {
+              "description": "Required to render isolation: privileged; confirms the namespace admits privileged pods.",
+              "type": "boolean",
+              "default": false
+            },
+            "image": {
+              "description": "Runner (docker-in-docker) image.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "repository": {
+                  "description": "Image repository.",
+                  "type": "string",
+                  "default": "n8nio/n8n-sandbox-service-runner-dind"
+                },
+                "tag": {
+                  "description": "Image tag.",
+                  "type": "string",
+                  "default": "1.16.0"
+                }
+              }
+            },
+            "sandboxImage": {
+              "description": "Image each sandbox container runs from.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "repository": {
+                  "description": "Image repository.",
+                  "type": "string",
+                  "default": "n8nio/n8n-sandbox-service-sandbox"
+                },
+                "tag": {
+                  "description": "Image tag.",
+                  "type": "string",
+                  "default": "1.16.0"
+                }
+              }
+            },
+            "replicas": {
+              "description": "Number of runner replicas.",
+              "type": "integer",
+              "default": 1,
+              "minimum": 1
+            },
+            "capacityTotal": {
+              "description": "Maximum concurrent sandboxes per runner. Mandatory; size it for your node pool.",
+              "type": "string",
+              "default": "100",
+              "pattern": "^[0-9]+$"
+            },
+            "dataRootSizeLimit": {
+              "description": "Size limit of the runner scratch emptyDir.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
-                { "type": "integer" },
-                { "type": "string" }
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
               ],
               "x-kubernetes-int-or-string": true
             },
-            "memory": {
-              "description": "Memory (RAM) available to each runner replica.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [
-                { "type": "integer" },
-                { "type": "string" }
-              ],
-              "x-kubernetes-int-or-string": true
+            "nodeSelector": {
+              "description": "Node selector for the runner pods (defaults to sysbox-install: yes).",
+              "type": "object",
+              "default": {
+                "sysbox-install": "yes"
+              }
+            },
+            "tolerations": {
+              "description": "Tolerations for the Sysbox taint (defaults to the upstream sysbox-runtime=not-running toleration).",
+              "type": "array",
+              "default": [
+                {
+                  "key": "sysbox-runtime",
+                  "operator": "Equal",
+                  "value": "not-running",
+                  "effect": "NoSchedule"
+                }
+              ]
+            },
+            "resourcesPreset": {
+              "description": "Sizing preset for each runner replica.",
+              "type": "string",
+              "default": "t1.medium",
+              "enum": [
+                "t1.nano",
+                "t1.micro",
+                "t1.small",
+                "t1.medium",
+                "t1.large",
+                "t1.xlarge",
+                "t1.2xlarge",
+                "t1.4xlarge",
+                "c1.nano",
+                "c1.micro",
+                "c1.small",
+                "c1.medium",
+                "c1.large",
+                "c1.xlarge",
+                "c1.2xlarge",
+                "c1.4xlarge",
+                "s1.nano",
+                "s1.micro",
+                "s1.small",
+                "s1.medium",
+                "s1.large",
+                "s1.xlarge",
+                "s1.2xlarge",
+                "s1.4xlarge",
+                "u1.nano",
+                "u1.micro",
+                "u1.small",
+                "u1.medium",
+                "u1.large",
+                "u1.xlarge",
+                "u1.2xlarge",
+                "u1.4xlarge",
+                "m1.nano",
+                "m1.micro",
+                "m1.small",
+                "m1.medium",
+                "m1.large",
+                "m1.xlarge",
+                "m1.2xlarge",
+                "m1.4xlarge",
+                "nano",
+                "micro",
+                "small",
+                "medium",
+                "large",
+                "xlarge",
+                "2xlarge"
+              ]
+            },
+            "resources": {
+              "description": "Explicit CPU/memory overrides.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "CPU available to each runner replica.",
+                  "pattern": "^(\\\\+|-)?(([0-9]+(\\\\.[0-9]*)?)|(\\\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\\\+|-)?(([0-9]+(\\\\.[0-9]*)?)|(\\\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory (RAM) available to each runner replica.",
+                  "pattern": "^(\\\\+|-)?(([0-9]+(\\\\.[0-9]*)?)|(\\\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\\\+|-)?(([0-9]+(\\\\.[0-9]*)?)|(\\\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
             }
           }
         }
@@ -189,12 +512,53 @@
           "type": "string",
           "default": "t1.nano",
           "enum": [
-            "t1.nano", "t1.micro", "t1.small", "t1.medium", "t1.large", "t1.xlarge", "t1.2xlarge", "t1.4xlarge",
-            "c1.nano", "c1.micro", "c1.small", "c1.medium", "c1.large", "c1.xlarge", "c1.2xlarge", "c1.4xlarge",
-            "s1.nano", "s1.micro", "s1.small", "s1.medium", "s1.large", "s1.xlarge", "s1.2xlarge", "s1.4xlarge",
-            "u1.nano", "u1.micro", "u1.small", "u1.medium", "u1.large", "u1.xlarge", "u1.2xlarge", "u1.4xlarge",
-            "m1.nano", "m1.micro", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m1.2xlarge", "m1.4xlarge",
-            "nano", "micro", "small", "medium", "large", "xlarge", "2xlarge"
+            "t1.nano",
+            "t1.micro",
+            "t1.small",
+            "t1.medium",
+            "t1.large",
+            "t1.xlarge",
+            "t1.2xlarge",
+            "t1.4xlarge",
+            "c1.nano",
+            "c1.micro",
+            "c1.small",
+            "c1.medium",
+            "c1.large",
+            "c1.xlarge",
+            "c1.2xlarge",
+            "c1.4xlarge",
+            "s1.nano",
+            "s1.micro",
+            "s1.small",
+            "s1.medium",
+            "s1.large",
+            "s1.xlarge",
+            "s1.2xlarge",
+            "s1.4xlarge",
+            "u1.nano",
+            "u1.micro",
+            "u1.small",
+            "u1.medium",
+            "u1.large",
+            "u1.xlarge",
+            "u1.2xlarge",
+            "u1.4xlarge",
+            "m1.nano",
+            "m1.micro",
+            "m1.small",
+            "m1.medium",
+            "m1.large",
+            "m1.xlarge",
+            "m1.2xlarge",
+            "m1.4xlarge",
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
           ]
         },
         "resources": {
@@ -206,8 +570,12 @@
               "description": "CPU available to the SearXNG container.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
-                { "type": "integer" },
-                { "type": "string" }
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
               ],
               "x-kubernetes-int-or-string": true
             },
@@ -215,8 +583,12 @@
               "description": "Memory (RAM) available to the SearXNG container.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
-                { "type": "integer" },
-                { "type": "string" }
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
               ],
               "x-kubernetes-int-or-string": true
             }

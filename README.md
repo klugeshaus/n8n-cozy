@@ -6,7 +6,7 @@ optional checkboxes:
 
 | Toggle | What it deploys |
 |---|---|
-| **Code Sandbox** | n8n external task runners (`n8nio/runners`) wired to the n8n task broker, so the JavaScript/Python **Code** node runs in an isolated sandbox. |
+| **Code Sandbox** | The [n8n sandbox service](https://github.com/n8n-io/n8n-sandbox-service) — sandbox API + Sysbox runners — deployed alongside n8n and wired via `N8N_INSTANCE_AI_SANDBOX_*`. **Setup 1**, the setup n8n recommends for self-hosted production. |
 | **Search (SearXNG)** | A private in-cluster SearXNG metasearch engine with its **JSON API** enabled, reachable from n8n at `http://<release>-search:8080`. |
 
 Both are disabled by default. Enabling them deploys the extra components as
@@ -87,6 +87,12 @@ packages/
 - An OCI registry you can push to (e.g. `ghcr.io/<org>/n8n`).
 - For community nodes / SearXNG upstream engines: outbound internet from the
   tenant namespace (npm registry, search engines).
+- **Only for the Code Sandbox toggle:** a dedicated Ubuntu node pool with
+  Sysbox installed (Kubernetes 1.32+, >= 4 CPU / 4 GB per node,
+  `br_netfilter`, `RuntimeClass sysbox-runc`). That is a cluster-level
+  prerequisite — see [Code Sandbox](#code-sandbox-n8n-sandbox-service--sysbox).
+  On immutable-rootfs clusters such as **Talos** use privileged isolation
+  instead.
 
 > **RBAC:** no ClusterRole edit is needed. In `v1.7.1`,
 > `cozystack-basics`'s `cozy:tenant:base` role already grants
@@ -312,39 +318,123 @@ Set `communityPackages` to a JSON array, e.g.
 boot; this **requires egress to the npm registry** and locks the
 community-packages UI. Leave it empty to install nodes from the n8n UI.
 
-### Code Sandbox (external task runners)
+### Environment (SearXNG container)
 
-Enabling `sandbox.enabled`:
+For an instance named `n8n-ai`, the Search toggle renders the following
+container environment on the SearXNG Deployment. These are the values the
+dashboard shows for the `n8n-ai-search` workload:
 
-- adds `N8N_RUNNERS_MODE=external`,
-  `N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0`, `N8N_RUNNERS_AUTH_TOKEN` and
-  `N8N_NATIVE_PYTHON_RUNNER=true` to the n8n main container (broker port
-  **5679**);
-- creates Service `n8n-<name>-broker` (in-cluster only);
-- creates Deployment `n8n-<name>-runner` from `n8nio/runners:<image.tag>`,
-  with `N8N_RUNNERS_TASK_BROKER_URI=http://n8n-<name>-broker:5679`, the same
-  auth token, and launcher health checks on port **5680**.
+| Variable | Value | Optional |
+| --- | --- | --- |
+| `SEARXNG_BASE_URL` | `http://n8n-ai-search:8080/` | `false` |
+| `SEARXNG_SECRET` | set to the key `SEARXNG_SECRET` in secret `n8n-ai-search-config` | `false` |
 
-Notes:
+`SEARXNG_SECRET` is generated once and preserved via `lookup`, and is also
+written into `server.secret_key` in the same Secret's `settings.yml`. n8n
+itself receives `SEARXNG_URL` (without the trailing slash) for convenience.
 
-- **Version parity is enforced by construction**: the runner tag is always
-  derived from `image.tag`, so the n8n and runner versions cannot diverge.
-- **n8n >= 2.13.0 is required** for external task runners. The pinned default
-  is `2.48.5`; do not override `image.tag` with an older release while the
-  sandbox is enabled.
-- The runners use n8n's **stock launcher policy** (`/etc/n8n-task-runners.json`).
-  Advanced `NODE_FUNCTION_ALLOW_EXTERNAL` / `N8N_RUNNERS_STDLIB_ALLOW`
-  allow-lists are `env-overrides` in that launcher config, not container env
-  vars; to change them, mount a custom launcher config and set
-  `N8N_RUNNERS_CONFIG_PATH`.
-- The deprecated `N8N_RUNNERS_ENABLED` variable is intentionally **not** set.
+### Code Sandbox (n8n sandbox service + Sysbox)
+
+This is **Setup 1** from the n8n docs — the setup n8n recommends for
+self-hosted production. Workflow data stays in your infrastructure, and with
+Sysbox the runners do **not** need `privileged: true`.
+
+Enabling `sandbox.enabled` renders the whole
+[n8n sandbox service](https://github.com/n8n-io/n8n-sandbox-service) inside
+the same instance and points n8n at it:
+
+| Object | Name |
+| --- | --- |
+| Sandbox API | Deployment + Service `n8n-<name>-sandbox` (http `8080`, grpc `9090`) |
+| Runners | StatefulSet + headless Service `n8n-<name>-sandbox-runner` |
+| Config / auth | `n8n-<name>-sandbox-config` ConfigMap, `n8n-<name>-sandbox-auth` Secret |
+| mTLS | `n8n-<name>-sandbox-ca` plus four leaf Secrets: `-tls-api-registration`, `-tls-api-control-client`, `-tls-runner-registration`, `-tls-runner-control-server` |
+| Data | PVC `n8n-<name>-sandbox-data` |
+
+n8n is wired to the API with exactly these variables (all verified present in
+n8n `2.48.5`; introduced in `2.16.0`, and `instance-ai` is a default module,
+so no `N8N_ENABLED_MODULES` is needed):
+
+| Variable | Value |
+| --- | --- |
+| `N8N_INSTANCE_AI_SANDBOX_ENABLED` | `true` |
+| `N8N_INSTANCE_AI_SANDBOX_PROVIDER` | `n8n-sandbox` |
+| `N8N_SANDBOX_SERVICE_URL` | `http://n8n-<name>-sandbox:8080` |
+| `N8N_SANDBOX_SERVICE_API_KEY` | must match a value in `SANDBOX_API_KEYS` on the sandbox API |
+
+One chart value, `sandbox.apiKey`, feeds **both** sides — n8n's
+`N8N_SANDBOX_SERVICE_API_KEY` and the API's `SANDBOX_API_KEYS` — so they can
+never drift. Leave it empty and the chart generates a key once and preserves
+it via `lookup` across upgrades. `sandbox.runnerRegistrationToken` does the
+same for `SANDBOX_API_RUNNER_REGISTRATION_TOKEN`.
+
+**n8n >= 2.16.0 is required** for the sandbox service integration; the pinned
+default is `2.48.5`. n8n talks to the API over plain HTTP on the ClusterIP —
+mTLS is used only between the API and its runners, and is mandatory there. The
+chart generates a self-signed CA and the four leaf certificates in-chart and
+preserves them via `lookup`, so **no cert-manager dependency** is introduced.
+
+#### Cluster-level prerequisites (not installed by this chart)
+
+The sandbox runners need a dedicated node pool prepared once, cluster-wide:
+
+| Requirement | Value |
+| --- | --- |
+| Kubernetes | `1.32` or later (`1.32`–`1.35` per the upstream quickstart) |
+| Nodes | dedicated **Ubuntu Linux** worker pool with Sysbox installed |
+| Sizing | at least **4 CPUs and 4 GB RAM per node** |
+| Kernel | `br_netfilter` module loaded on those nodes |
+| Container runtime | containerd `>= 2.0.5` |
+| Credentials | an LLM API key for AI-assisted sandbox usage |
+
+Label the pool and install Sysbox (the installer rewrites containerd config,
+restarts kubelet, creates `RuntimeClass sysbox-runc` and taints the nodes
+`sysbox-runtime=not-running:NoSchedule`):
+
+```
+kubectl label nodes <node> sysbox-install=yes
+kubectl apply -f https://raw.githubusercontent.com/nestybox/sysbox/master/sysbox-k8s-manifests/sysbox-install.yaml
+kubectl get runtimeclass sysbox-runc
+kubectl get nodes -l sysbox-runtime=running
+```
+
+Provider notes: **GKE** — Standard clusters with Ubuntu node pools only
+(Autopilot is not supported). **EKS** — Ubuntu worker nodes, not the default
+Amazon Linux. **AKS** — the default worker nodes work; use at least four
+vCPUs per node.
+
+#### Talos / immutable-rootfs clusters
+
+Sysbox cannot install on distributions with a read-only root filesystem and
+machine-managed containerd configuration — this includes **Talos**,
+Bottlerocket, Flatcar and Fedora CoreOS. On such clusters switch the runner to
+privileged isolation, which runs on any node:
+
+```
+--set sandbox.runner.isolation=privileged \
+--set sandbox.runner.acknowledgePrivileged=true
+kubectl label namespace <tenant-ns> pod-security.kubernetes.io/enforce=privileged
+```
+
+The chart refuses to render a privileged runner unless
+`acknowledgePrivileged` is `true`, and privileged pods require the namespace
+PSA label. On the cluster this repo was developed against, all four nodes are
+Talos, so this is the only usable mode there.
+
+#### Sandbox service images and license
+
+The API and runner images (`n8nio/n8n-sandbox-service-api`,
+`-runner-dind`, `-sandbox`, tag `1.16.0`) come from
+`n8n-io/n8n-sandbox-service` under n8n's **Sustainable Use License** (with
+Enterprise terms for some components) — not MIT. This repo only *references*
+those images; it does not bundle their code, so its MIT license is unaffected.
 
 ### General n8n notes
 
 - **Stable encryption key.** `N8N_ENCRYPTION_KEY` is generated once and then
   preserved via `lookup` from the live `<release>-credentials` Secret. Changing
-  it makes stored credentials undecryptable. The same Secret holds the runner
-  auth token.
+  it makes stored credentials undecryptable. The same Secret holds the sandbox
+  API key (`SANDBOX_API_KEY`) shared with the sandbox service.
 - **Standalone / SQLite.** One replica, `Recreate` strategy, data on a RWO PVC
   at `/home/node/.n8n`. There is no queue mode (which would require Postgres +
   Redis). Scale-out is intentionally not offered.
@@ -437,7 +527,7 @@ installed. They are kept as YAML-parseable specs and are checked for syntax by
 | HelmRelease per instance | `n8n-<instance>` (prefix `n8n-`) |
 | n8n Deployment + Service + PVC | `n8n-<instance>`, `n8n-<instance>-data` |
 | Credentials Secret | `n8n-<instance>-credentials` |
-| Code Sandbox | `n8n-<instance>-runner`, `n8n-<instance>-broker` |
+| Code Sandbox | `n8n-<instance>-sandbox` (API Deployment + Service, http 8080 / grpc 9090), `n8n-<instance>-sandbox-runner` (StatefulSet + headless Service), `n8n-<instance>-sandbox-config`, `n8n-<instance>-sandbox-auth`, `n8n-<instance>-sandbox-ca` + four `n8n-<instance>-sandbox-tls-*` Secrets, `n8n-<instance>-sandbox-data` |
 | Search | `n8n-<instance>-search`, `n8n-<instance>-search-config` |
 | Ingress / HTTPRoute | `n8n-<instance>-ingress` / `n8n-<instance>` |
 
@@ -458,6 +548,6 @@ and permission notice are kept intact. There is no copyleft obligation and no
 attribution required beyond keeping the notice.
 
 This project ships original Helm templates, YAML manifests, JSON Schema and
-scripts; the third-party components it deploys (n8n, `n8nio/runners`, SearXNG)
+scripts; the third-party components it deploys (n8n, the n8n sandbox service images, SearXNG)
 are **not** part of this repository and remain under their own upstream
 licenses (n8n's Sustainable Use License, SearXNG AGPL-3.0, and so on).

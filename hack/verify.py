@@ -261,8 +261,22 @@ def check_strict_yaml(c: Check):
 # 4. ApplicationDefinition contract
 # --------------------------------------------------------------------------
 TABS_ALLOWED = {"workloads", "ingresses", "services", "secrets", "yaml"}
-CHART_RESOURCE_PATTERNS_SERVICES = ["n8n-{{ .name }}", "n8n-{{ .name }}-broker", "n8n-{{ .name }}-search"]
-CHART_RESOURCE_PATTERNS_SECRETS = ["n8n-{{ .name }}-credentials", "n8n-{{ .name }}-search-config"]
+CHART_RESOURCE_PATTERNS_SERVICES = [
+    "n8n-{{ .name }}",
+    "n8n-{{ .name }}-sandbox",
+    "n8n-{{ .name }}-sandbox-runner",
+    "n8n-{{ .name }}-search",
+]
+CHART_RESOURCE_PATTERNS_SECRETS = [
+    "n8n-{{ .name }}-credentials",
+    "n8n-{{ .name }}-search-config",
+    "n8n-{{ .name }}-sandbox-auth",
+    "n8n-{{ .name }}-sandbox-ca",
+    "n8n-{{ .name }}-sandbox-tls-api-registration",
+    "n8n-{{ .name }}-sandbox-tls-api-control-client",
+    "n8n-{{ .name }}-sandbox-tls-runner-registration",
+    "n8n-{{ .name }}-sandbox-tls-runner-control-server",
+]
 CHART_RESOURCE_PATTERNS_INGRESSES = ["n8n-{{ .name }}-ingress"]
 
 
@@ -478,15 +492,23 @@ def image_tag(doc):
 
 
 def check_render_matrix(c: Check):
+    """Render the chart across the toggle combinations and assert the
+    structural contract of the n8n sandbox service (Setup 1).
+
+    Counts are derived from the chart, not guessed: default 8 docs; enabling
+    the sandbox adds the CA + 4 leaf TLS Secrets, the auth Secret, the API
+    ConfigMap/Service/Deployment/PVC and the runner Service/StatefulSet;
+    enabling search adds its Secret/Service/Deployment.
+    """
     cases = [
         ("default", (), 8),
-        ("sandbox", ("--set", "sandbox.enabled=true"), 10),
+        ("sandbox", ("--set", "sandbox.enabled=true"), 20),
         ("search", ("--set", "search.enabled=true"), 11),
-        ("sandbox+search", ("--set", "sandbox.enabled=true", "--set", "search.enabled=true"), 13),
+        ("sandbox+search", ("--set", "sandbox.enabled=true", "--set", "search.enabled=true"), 23),
         ("namespaces", ("--set", "sandbox.enabled=true", "--set", "search.enabled=true",
                         "--set", "_namespace.gateway=cozy-system",
                         "--set", "_namespace.ingress=nginx",
-                        "--set", "_namespace.host=example.org"), 13),
+                        "--set", "_namespace.host=example.org"), 23),
         ("wildcard", ("--set", "_cluster.wildcard-secret-name=wildcard-tls"), 8),
         ("preset", ("--set", "resourcesPreset=t1.medium"), 8),
     ]
@@ -499,7 +521,28 @@ def check_render_matrix(c: Check):
         if len(docs) != expected:
             c.fail(f"case {label}: expected {expected} docs, got {len(docs)}")
             return
-    # a) default
+
+    sandbox_env = {
+        "N8N_INSTANCE_AI_SANDBOX_ENABLED": "true",
+        "N8N_INSTANCE_AI_SANDBOX_PROVIDER": "n8n-sandbox",
+        "N8N_SANDBOX_SERVICE_URL": "http://n8n-test-sandbox:8080",
+        "N8N_SANDBOX_SERVICE_API_KEY": None,  # secretKeyRef, checked separately
+    }
+
+    def main_env(docs):
+        dep = by_name(docs, "Deployment", "n8n-test")
+        if dep is None:
+            return {}
+        out = {}
+        for e in (((dep.get("spec") or {}).get("template") or {}).get("spec", {})
+                  .get("containers", [{}])[0].get("env", [])):
+            out[e.get("name")] = e
+        return out
+
+    def raw_contains(docs, needle):
+        return needle in yaml.safe_dump_all([d for d in docs if d])
+
+    # a) default: baseline kinds, no HTTPRoute, exactly one Ingress, no sandbox
     default = rendered["default"]
     kinds = {d.get("kind") for d in default}
     required = {"Secret", "PersistentVolumeClaim", "Role", "RoleBinding",
@@ -510,60 +553,114 @@ def check_render_matrix(c: Check):
         c.fail("default render must not contain an HTTPRoute")
     if sum(1 for d in default if d.get("kind") == "Ingress") != 1:
         c.fail("default render must contain exactly one Ingress")
-    # b) sandbox: runner tag parity with main image
+    if raw_contains(default, "N8N_RUNNERS") or raw_contains(default, "n8n-test-broker"):
+        c.fail("default render still contains task-runner / broker references")
+    for name in sandbox_env:
+        if name in main_env(default):
+            c.fail(f"default render must not set {name} when sandbox.enabled=false")
+    if any("sandbox" in (d.get("metadata", {}).get("name") or "") for d in default):
+        c.fail("default render must not contain any sandbox-* object")
+
+    # b) sandbox-on object set
     sandbox = rendered["sandbox"]
-    runners = doc_names(sandbox, "Deployment")
-    if "n8n-test-runner" not in runners:
-        c.fail(f"sandbox case: no Deployment named n8n-test-runner (got {runners})")
-    else:
-        main = next(d for d in sandbox if d.get("kind") == "Deployment"
-                    and d["metadata"]["name"] == "n8n-test")
-        runner = next(d for d in sandbox if d["metadata"]["name"] == "n8n-test-runner")
-        if image_tag(main) != image_tag(runner):
-            c.fail(f"runner image tag {image_tag(runner)!r} != main image tag {image_tag(main)!r}")
-    # d) sandbox+search
+    tls_names = [
+        "n8n-test-sandbox-ca",
+        "n8n-test-sandbox-tls-api-registration",
+        "n8n-test-sandbox-tls-api-control-client",
+        "n8n-test-sandbox-tls-runner-registration",
+        "n8n-test-sandbox-tls-runner-control-server",
+    ]
+    expected_objs = (
+        [("Secret", n) for n in tls_names]
+        + [("Secret", "n8n-test-sandbox-auth"),
+           ("ConfigMap", "n8n-test-sandbox-config"),
+           ("Service", "n8n-test-sandbox"),
+           ("Deployment", "n8n-test-sandbox"),
+           ("PersistentVolumeClaim", "n8n-test-sandbox-data"),
+           ("Service", "n8n-test-sandbox-runner"),
+           ("StatefulSet", "n8n-test-sandbox-runner")]
+    )
+    for kind, name in expected_objs:
+        if by_name(sandbox, kind, name) is None:
+            c.fail(f"sandbox case: missing {kind} named {name}")
+    for n in tls_names:
+        sec = by_name(sandbox, "Secret", n)
+        if sec is None:
+            continue
+        data = sec.get("data") or {}
+        # The CA Secret holds only the CA keypair; leaf Secrets additionally
+        # carry ca.crt so that the API and runner can verify each other.
+        required = ("tls.crt", "tls.key") if n.endswith("-ca") else ("tls.crt", "tls.key", "ca.crt")
+        for key in required:
+            if not data.get(key):
+                c.fail(f"sandbox TLS Secret {n} is missing data.{key}")
+    creds = by_name(sandbox, "Secret", "n8n-test-credentials")
+    if creds is None or not (creds.get("data") or {}).get("SANDBOX_API_KEY"):
+        c.fail("credentials Secret must carry SANDBOX_API_KEY (single source of truth)")
+    if not (creds.get("data") or {}).get("N8N_ENCRYPTION_KEY"):
+        c.fail("credentials Secret must still carry N8N_ENCRYPTION_KEY")
+
+    # c) n8n env wiring (on) and no legacy runner vars anywhere
+    on_env = main_env(sandbox)
+    for name, value in sandbox_env.items():
+        if name not in on_env:
+            c.fail(f"sandbox case: n8n main is missing {name}")
+        elif value is not None and on_env[name].get("value") != value:
+            c.fail(f"sandbox case: {name} = {on_env[name].get('value')!r}, expected {value!r}")
+    key_ref = ((on_env.get("N8N_SANDBOX_SERVICE_API_KEY") or {}).get("valueFrom") or {})
+    if key_ref.get("secretKeyRef", {}).get("key") != "SANDBOX_API_KEY":
+        c.fail("N8N_SANDBOX_SERVICE_API_KEY must reference the SANDBOX_API_KEY secret key")
+    if raw_contains(sandbox, "N8N_RUNNERS") or raw_contains(sandbox, "n8n-test-broker"):
+        c.fail("sandbox render still contains task-runner / broker references")
+
+    # d) sandbox + search
     both = rendered["sandbox+search"]
-    for kind, name in (("Deployment", "n8n-test-runner"), ("Service", "n8n-test-broker"),
-                       ("Service", "n8n-test-search"), ("Secret", "n8n-test-search-config")):
-        if name not in doc_names(both, kind):
+    for kind, name in (("Service", "n8n-test-search"),
+                       ("Deployment", "n8n-test-search"),
+                       ("Secret", "n8n-test-search-config")):
+        if by_name(both, kind, name) is None:
             c.fail(f"sandbox+search case: missing {kind} named {name}")
-    sec = next((d for d in both if d.get("kind") == "Secret"
-                and d["metadata"]["name"] == "n8n-test-search-config"), None)
-    if sec is not None:
-        sdata = sec.get("stringData") or {}
-        settings = sdata.get("settings.yml") or ""
-        if "json" not in settings:
-            c.fail("n8n-test-search-config stringData.settings.yml does not enable "
-                   "the SearXNG JSON API (no 'json' substring)")
-    # e) namespaces overrides: HTTPRoute yes, Ingress no
+    sec = by_name(both, "Secret", "n8n-test-search-config")
+    if sec is not None and "json" not in ((sec.get("stringData") or {}).get("settings.yml") or ""):
+        c.fail("search-config settings.yml does not enable the SearXNG JSON API")
+
+    # e) gateway namespace overrides switch Ingress -> HTTPRoute
     ns = rendered["namespaces"]
     if not any(d.get("kind") == "HTTPRoute" for d in ns):
         c.fail("namespaces case: expected a gateway.networking.k8s.io HTTPRoute, none found")
     if any(d.get("kind") == "Ingress" for d in ns):
         c.fail("namespaces case: must not render a networking.k8s.io Ingress when "
                "_namespace.gateway is set")
-    # f) Service selectors must target ONLY the n8n main pod. Service selectors
-    #    are inclusive, so the generic labels would also match runner/search pods.
+
+    # f) Service selectors must target only their own pods. Inclusive selectors
+    #    would otherwise load-balance the main UI onto sandbox/search pods.
     main_svc = by_name(both, "Service", "n8n-test")
-    broker_svc = by_name(both, "Service", "n8n-test-broker")
+    sandbox_svc = by_name(both, "Service", "n8n-test-sandbox")
+    runner_svc = by_name(both, "Service", "n8n-test-sandbox-runner")
+    search_svc = by_name(both, "Service", "n8n-test-search")
     main_dep = by_name(both, "Deployment", "n8n-test")
-    runner_dep = by_name(both, "Deployment", "n8n-test-runner")
+    api_dep = by_name(both, "Deployment", "n8n-test-sandbox")
+    runner_sts = by_name(both, "StatefulSet", "n8n-test-sandbox-runner")
     search_dep = by_name(both, "Deployment", "n8n-test-search")
-    for svc, label in ((main_svc, "main Service"), (broker_svc, "broker Service")):
+    for svc, label, expected in ((main_svc, "main Service", "main"),
+                                 (sandbox_svc, "sandbox API Service", "sandbox-api"),
+                                 (runner_svc, "runner Service", "sandbox-runner"),
+                                 (search_svc, "search Service", "search")):
         if svc is None:
             c.fail(f"{label} missing from sandbox+search render")
-        elif service_selector(svc).get("app.kubernetes.io/component") != "main":
-            c.fail(f"{label} selector must include app.kubernetes.io/component: main "
+        elif service_selector(svc).get("app.kubernetes.io/component") != expected:
+            c.fail(f"{label} selector must include app.kubernetes.io/component: {expected} "
                    f"(got {service_selector(svc)!r})")
-    for dep, label, expected in ((main_dep, "main", "main"),
-                                 (runner_dep, "runner", "task-runner"),
+    for obj, label, expected in ((main_dep, "main", "main"),
+                                 (api_dep, "sandbox API", "sandbox-api"),
+                                 (runner_sts, "sandbox runner", "sandbox-runner"),
                                  (search_dep, "search", "search")):
-        if dep is None:
-            c.fail(f"{label} Deployment missing from sandbox+search render")
-        elif pod_labels(dep).get("app.kubernetes.io/component") != expected:
-            c.fail(f"{label} pod labels must include "
-                   f"app.kubernetes.io/component: {expected} "
-                   f"(got {pod_labels(dep)!r})")
+        if obj is None:
+            c.fail(f"{label} workload missing from sandbox+search render")
+        elif pod_labels(obj).get("app.kubernetes.io/component") != expected:
+            c.fail(f"{label} pod labels must include app.kubernetes.io/component: {expected} "
+                   f"(got {pod_labels(obj)!r})")
+
     # g) Cozystack resource-preset matrix (t1.small default)
     res = container_resources(main_dep or {})
     exp_limits = {"cpu": "1", "memory": "512Mi", "ephemeral-storage": "2Gi"}
@@ -578,6 +675,7 @@ def check_render_matrix(c: Check):
     preset_limits = container_resources(preset_dep or {}).get("limits") or {}
     if preset_limits.get("cpu") != "2" or preset_limits.get("memory") != "1Gi":
         c.fail(f"t1.medium preset limits = {preset_limits!r}, expected cpu '2' / memory '1Gi'")
+
     # h) wildcard cert: keep the tls section (HTTP->HTTPS redirect) but drop
     #    secretName and all cert-manager annotations.
     ing = next((d for d in rendered["wildcard"] if d.get("kind") == "Ingress"), None)
@@ -593,9 +691,8 @@ def check_render_matrix(c: Check):
         if any(k.startswith("cert-manager.io") or k.startswith("acme.cert-manager.io")
                for k in anns):
             c.fail(f"wildcard case: cert-manager annotations must be omitted (got {sorted(anns)!r})")
-    c.ok("render matrix: 8/10/11/13/13/8/8 docs, kinds, names, tag parity, "
-         "HTTPRoute switch, selector contract, preset matrix, wildcard TLS")
-
+    c.ok("render matrix: 8/20/11/23/23/8/8 docs, sandbox service objects, "
+         "n8n env wiring, HTTPRoute switch, selector contract, preset matrix, wildcard TLS")
 
 # --------------------------------------------------------------------------
 # 9. RD chart render

@@ -1,88 +1,518 @@
 {{/*
-  Code Sandbox — n8n external task runners.
+  Code Sandbox — the n8n sandbox service (API + in-cluster runners).
 
-  The task broker runs *inside* the n8n main container (N8N_RUNNERS_MODE=external,
-  N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0). This file exposes it through a
-  ClusterIP Service and runs n8nio/runners as a separate Deployment that
-  connects back over the cluster network. This is the same topology as the
-  official n8n docker-compose stacks (http://n8n:5679); the official Helm
-  chart uses a pod sidecar over localhost instead. Both are supported.
+  n8n talks to the sandbox API over plain HTTP (N8N_SANDBOX_SERVICE_URL,
+  N8N_SANDBOX_SERVICE_API_KEY); the API owns the store and the runner fleet.
+  Runners register over mutual-TLS gRPC, so this file also renders an
+  in-chart self-signed CA plus four leaf certificates (no cert-manager):
+  every TLS Secret is generated once and then preserved from the live
+  cluster via lookup, so upgrades never rotate certificates behind running
+  pods.
 
-  The runner image tag is always .Values.image.tag: n8n requires exact version
-  parity between the broker and its runners.
+  The admin API key shared between n8n and the API lives in the
+  <release>-credentials Secret (key SANDBOX_API_KEY, see secret.yaml): the
+  API reads it from there, so the two sides can never drift — including on
+  the first install, where a cross-template lookup cannot see a freshly
+  generated value yet. The auth Secret's `api-keys` key mirrors that value
+  for compatibility with upstream tooling.
+
+  Env names, TLS mount layout and probes follow upstream
+  n8n-io/n8n-sandbox-service @ service/v1.16.0 (charts/n8n-sandbox-service).
 */}}
 {{- if .Values.sandbox.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- $apiName := printf "%s-sandbox" .Release.Name }}
+{{- $runnerName := printf "%s-sandbox-runner" .Release.Name }}
+{{- $authName := printf "%s-sandbox-auth" .Release.Name }}
+{{- $caName := printf "%s-sandbox-ca" .Release.Name }}
+
+{{- if and .Values.sandbox.runner.enabled (eq .Values.sandbox.runner.isolation "privileged") (not .Values.sandbox.runner.acknowledgePrivileged) }}
+{{- fail "sandbox.runner.isolation=privileged runs the runner with privileged: true (an escape from the runner container reaches the node). Set sandbox.runner.acknowledgePrivileged=true once you confirmed the target namespace admits privileged pods (Pod Security Admission level privileged)." }}
+{{- end }}
+{{- if and .Values.sandbox.runner.enabled (eq (toString .Values.sandbox.runner.capacityTotal) "") }}
+{{- fail "sandbox.runner.capacityTotal is required: set the maximum number of concurrent sandboxes per runner replica, sized for your node pool." }}
+{{- end }}
+
+{{/* Self-signed CA, generated once and preserved via lookup. */}}
+{{- $ca := "" }}
+{{- $genCA := false }}
+{{- $caSecret := lookup "v1" "Secret" $ns $caName }}
+{{- if and $caSecret $caSecret.data }}
+{{- $ca = buildCustomCert (index $caSecret.data "tls.crt" | b64dec) (index $caSecret.data "tls.key" | b64dec) }}
+{{- else }}
+{{- $ca = genCA "sandbox-ca" 3650 }}
+{{- $genCA = true }}
+{{- end }}
+{{- if $genCA }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $caName }}
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox
+type: Opaque
+data:
+  tls.crt: {{ $ca.Cert | b64enc }}
+  tls.key: {{ $ca.Key | b64enc }}
+{{- end }}
+
+{{/*
+  Four leaf certificates, one per mTLS role, each signed by the CA above and
+  preserved via lookup (a leaf is only rendered while it does not exist yet):
+    api-registration      — API server cert for runner registration (gRPC :9090)
+    api-control-client    — API client cert for runner control connections
+    runner-registration   — runner client cert for API registration
+    runner-control-server — runner server cert for API control (gRPC :9091)
+  Each Secret carries tls.crt / tls.key / ca.crt, mirroring the upstream
+  chart's tls.certificates.* keys.
+*/}}
+{{- $apiDns := list $apiName (printf "%s.%s" $apiName $ns) (printf "%s.%s.svc" $apiName $ns) (printf "%s.%s.svc.cluster.local" $apiName $ns) }}
+{{- $runnerDns := list $runnerName (printf "%s.%s" $runnerName $ns) (printf "%s.%s.svc" $runnerName $ns) (printf "%s.%s.svc.cluster.local" $runnerName $ns) (printf "*.%s.%s.svc.cluster.local" $runnerName $ns) }}
+{{- $tlsSlots := list
+      (dict "slot" "api-registration" "cn" $apiName "dns" $apiDns)
+      (dict "slot" "api-control-client" "cn" (printf "%s-control-client" $apiName) "dns" (list $apiName))
+      (dict "slot" "runner-registration" "cn" (printf "%s-registration-client" $runnerName) "dns" (list $runnerName))
+      (dict "slot" "runner-control-server" "cn" $runnerName "dns" $runnerDns) }}
+{{- range $slot := $tlsSlots }}
+{{- $name := printf "%s-sandbox-tls-%s" $.Release.Name $slot.slot }}
+{{- $cn := $slot.cn | trunc 64 | trimSuffix "-" }}
+{{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}
+{{- if not $existing }}
+{{- $leaf := genSignedCert $cn nil $slot.dns 365 $ca }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "n8n.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: sandbox
+type: Opaque
+data:
+  tls.crt: {{ $leaf.Cert | b64enc }}
+  tls.key: {{ $leaf.Key | b64enc }}
+  ca.crt: {{ $ca.Cert | b64enc }}
+{{- end }}
+{{- end }}
+
+{{/*
+  Auth material. The admin key (`api-keys`) is mirrored from the
+  <release>-credentials Secret's SANDBOX_API_KEY, where secret.yaml does the
+  lookup-preserve-or-generate dance — the API reads that same key directly
+  from <release>-credentials, so a mirror mismatch can never break auth.
+  The runner-facing keys live only here: they are generated once and then
+  preserved via lookup of the auth Secret itself. `provisioner-api-keys`
+  and `scaler-api-keys` are optional upstream roles; they are rendered
+  empty so the API treats them as "no extra keys".
+*/}}
+{{- $credsSecret := lookup "v1" "Secret" $ns (printf "%s-credentials" .Release.Name) }}
+{{- $authSecret := lookup "v1" "Secret" $ns $authName }}
+{{- $apiKeyB64 := "" }}
+{{- $regTokenB64 := "" }}
+{{- $runnerKeyB64 := "" }}
+{{- if .Values.sandbox.apiKey }}
+{{- $apiKeyB64 = .Values.sandbox.apiKey | b64enc }}
+{{- else if and $credsSecret $credsSecret.data }}
+{{- $apiKeyB64 = index $credsSecret.data "SANDBOX_API_KEY" | default "" }}
+{{- end }}
+{{- if and $authSecret $authSecret.data }}
+{{- $regTokenB64 = index $authSecret.data "runner-registration-token" | default "" }}
+{{- $runnerKeyB64 = index $authSecret.data "runner-api-key" | default "" }}
+{{- end }}
+{{- if and (not $apiKeyB64) (not .Values.sandbox.apiKey) }}
+{{- $apiKeyB64 = randAlphaNum 32 | b64enc }}
+{{- end }}
+{{- if not $regTokenB64 }}
+{{- if .Values.sandbox.runnerRegistrationToken }}
+{{- $regTokenB64 = .Values.sandbox.runnerRegistrationToken | b64enc }}
+{{- else }}
+{{- $regTokenB64 = randAlphaNum 32 | b64enc }}
+{{- end }}
+{{- end }}
+{{- if not $runnerKeyB64 }}
+{{- $runnerKeyB64 = randAlphaNum 32 | b64enc }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $apiName }}-config
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-api
+data:
+  SANDBOX_API_LISTEN_ADDR: ":8080"
+  SANDBOX_API_GRPC_LISTEN_ADDR: ":9090"
+  SANDBOX_API_STORE: "sqlite"
+  SANDBOX_API_DATA_DIR: "/tmp/sandbox-api"
+  SANDBOX_API_MAX_FILE_BYTES: "10485760"
+  SANDBOX_API_DEFAULT_MAX_SANDBOXES: "50"
+  SANDBOX_API_MAX_INFLIGHT_PER_TENANT: "512"
+  SANDBOX_API_ENABLE_CORS: "false"
+  SANDBOX_API_RUNNER_HEARTBEAT_GRACE: "45s"
+  SANDBOX_API_IDLE_STOP_AFTER: "1h"
+  SANDBOX_API_IDLE_DELETE_AFTER: "24h"
+  SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER: "1m"
+  SANDBOX_API_IDLE_SWEEP_INTERVAL: "1m"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $authName }}
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-api
+type: Opaque
+data:
+  api-keys: {{ $apiKeyB64 | quote }}
+  runner-registration-token: {{ $regTokenB64 | quote }}
+  runner-api-key: {{ $runnerKeyB64 | quote }}
+  runner-api-keys: {{ $runnerKeyB64 | quote }}
+  provisioner-api-keys: ""
+  scaler-api-keys: ""
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ printf "%s-sandbox-data" .Release.Name }}
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Release.Name }}-broker
+  name: {{ $apiName }}
   labels:
     {{- include "n8n.labels" . | nindent 4 }}
-    app.kubernetes.io/component: task-broker
+    app.kubernetes.io/component: sandbox-api
 spec:
   type: ClusterIP
   selector:
-    {{- include "n8n.mainSelectorLabels" . | nindent 4 }}
+    {{- include "n8n.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-api
   ports:
-    - name: broker
-      port: 5679
-      targetPort: broker
+    - name: http
+      port: 8080
+      targetPort: http
       protocol: TCP
+    - name: grpc
+      port: 9090
+      targetPort: grpc
+      protocol: TCP
+
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}-runner
+  name: {{ $apiName }}
   labels:
     {{- include "n8n.labels" . | nindent 4 }}
-    app.kubernetes.io/component: task-runner
+    app.kubernetes.io/component: sandbox-api
 spec:
-  replicas: {{ .Values.sandbox.replicas }}
+  replicas: {{ .Values.sandbox.api.replicas }}
   selector:
     matchLabels:
       {{- include "n8n.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: task-runner
+      app.kubernetes.io/component: sandbox-api
   template:
     metadata:
       labels:
         {{- include "n8n.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: task-runner
-        workloads.cozystack.io/resource-preset: {{ .Values.sandbox.resourcesPreset | quote }}
+        app.kubernetes.io/component: sandbox-api
+        workloads.cozystack.io/resource-preset: {{ .Values.sandbox.api.resourcesPreset | quote }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 100
+        fsGroupChangePolicy: OnRootMismatch
       containers:
-        - name: runner
-          image: {{ printf "%s:%s" .Values.sandbox.imageRepository .Values.image.tag | quote }}
+        - name: api
+          image: {{ printf "%s:%s" .Values.sandbox.api.image.repository .Values.sandbox.api.image.tag | quote }}
           imagePullPolicy: IfNotPresent
           ports:
-            - name: health
-              containerPort: 5680
+            - name: http
+              containerPort: 8080
               protocol: TCP
+            - name: grpc
+              containerPort: 9090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ $apiName }}-config
           env:
-            - name: N8N_RUNNERS_TASK_BROKER_URI
-              value: {{ printf "http://%s-broker:5679" .Release.Name | quote }}
-            - name: N8N_RUNNERS_AUTH_TOKEN
+            - name: SANDBOX_API_KEYS
+              # Single source of truth: n8n reads the very same value from
+              # <release>-credentials (see secret.yaml), so the two sides can
+              # never drift — including on the first install, where a
+              # cross-template lookup cannot see a freshly generated value.
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Release.Name }}-credentials
-                  key: N8N_RUNNERS_AUTH_TOKEN
-            - name: N8N_RUNNERS_AUTO_SHUTDOWN_TIMEOUT
-              value: "15"
-            - name: N8N_RUNNERS_LAUNCHER_LOG_LEVEL
-              value: "info"
-          resources:
-            {{- include "n8n.resources" (dict "preset" .Values.sandbox.resourcesPreset "explicit" .Values.sandbox.resources) | nindent 12 }}
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: health
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 5
+                  name: {{ printf "%s-credentials" .Release.Name }}
+                  key: SANDBOX_API_KEY
+            - name: SANDBOX_API_PROVISIONER_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $authName }}
+                  key: provisioner-api-keys
+                  optional: true
+            - name: SANDBOX_API_SCALER_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $authName }}
+                  key: scaler-api-keys
+                  optional: true
+            - name: SANDBOX_API_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $authName }}
+                  key: runner-registration-token
+            - name: SANDBOX_API_RUNNER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $authName }}
+                  key: runner-api-key
+            - name: SANDBOX_API_GRPC_TLS_CERT_FILE
+              value: /tls/api-registration/tls.crt
+            - name: SANDBOX_API_GRPC_TLS_KEY_FILE
+              value: /tls/api-registration/tls.key
+            - name: SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE
+              value: /tls/api-registration/ca.crt
+            - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE
+              value: /tls/api-control-client/ca.crt
+            - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE
+              value: /tls/api-control-client/tls.crt
+            - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE
+              value: /tls/api-control-client/tls.key
           livenessProbe:
             httpGet:
               path: /healthz
-              port: health
-            initialDelaySeconds: 15
-            periodSeconds: 20
-            timeoutSeconds: 5
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: api-registration-tls
+              mountPath: /tls/api-registration
+              readOnly: true
+            - name: api-control-client-tls
+              mountPath: /tls/api-control-client
+              readOnly: true
+            - name: api-data
+              mountPath: /tmp/sandbox-api
+          resources:
+            {{- include "n8n.resources" (dict "preset" .Values.sandbox.api.resourcesPreset "explicit" .Values.sandbox.api.resources) | nindent 12 }}
+      volumes:
+        - name: api-registration-tls
+          secret:
+            secretName: {{ printf "%s-sandbox-tls-api-registration" .Release.Name }}
+        - name: api-control-client-tls
+          secret:
+            secretName: {{ printf "%s-sandbox-tls-api-control-client" .Release.Name }}
+        - name: api-data
+          persistentVolumeClaim:
+            claimName: {{ printf "%s-sandbox-data" .Release.Name }}
+
+{{- if .Values.sandbox.runner.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $runnerName }}
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-runner
+spec:
+  clusterIP: None
+  selector:
+    {{- include "n8n.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-runner
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+    - name: control-grpc
+      port: 9091
+      targetPort: control-grpc
+      protocol: TCP
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $runnerName }}
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-runner
+spec:
+  serviceName: {{ $runnerName }}
+  replicas: {{ .Values.sandbox.runner.replicas }}
+  selector:
+    matchLabels:
+      {{- include "n8n.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sandbox-runner
+  template:
+    metadata:
+      labels:
+        {{- include "n8n.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: sandbox-runner
+        workloads.cozystack.io/resource-preset: {{ .Values.sandbox.runner.resourcesPreset | quote }}
+    spec:
+      automountServiceAccountToken: false
+      {{- if eq .Values.sandbox.runner.isolation "sysbox" }}
+      runtimeClassName: sysbox-runc
+      hostUsers: false
+      {{- end }}
+      containers:
+        - name: runner
+          image: {{ printf "%s:%s" .Values.sandbox.runner.image.repository .Values.sandbox.runner.image.tag | quote }}
+          imagePullPolicy: IfNotPresent
+          {{- if eq .Values.sandbox.runner.isolation "privileged" }}
+          securityContext:
+            privileged: true
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: control-grpc
+              containerPort: 9091
+              protocol: TCP
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SANDBOX_RUNNER_ID
+              value: "$(POD_NAME)"
+            - name: SANDBOX_RUNNER_API_GRPC_ADDR
+              value: {{ printf "%s:9090" $apiName | quote }}
+            - name: SANDBOX_RUNNER_HTTP_BASE_URL
+              value: {{ printf "https://$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:8080" $runnerName | quote }}
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR
+              value: {{ printf "$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:9091" $runnerName | quote }}
+            - name: SANDBOX_RUNNER_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $authName }}
+                  key: runner-api-keys
+            - name: SANDBOX_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $authName }}
+                  key: runner-registration-token
+            - name: SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE
+              value: {{ printf "%s:%s" .Values.sandbox.runner.sandboxImage.repository .Values.sandbox.runner.sandboxImage.tag | quote }}
+            - name: SANDBOX_RUNNER_DOCKER_HOST
+              value: "unix:///var/run/docker.sock"
+            - name: SANDBOX_RUNNER_LISTEN_ADDR
+              value: ":8080"
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR
+              value: ":9091"
+            - name: SANDBOX_RUNNER_DATA_DIR
+              value: "/var/sandboxes"
+            - name: SANDBOX_RUNNER_CAPACITY_TOTAL
+              value: {{ .Values.sandbox.runner.capacityTotal | quote }}
+            - name: SANDBOX_RUNNER_MAX_FILE_BYTES
+              value: "10485760"
+            - name: SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX
+              value: "256"
+            - name: SANDBOX_RUNNER_MAX_EXEC_TIMEOUT
+              value: "15m"
+            - name: SANDBOX_RUNNER_DEFAULT_MEMORY_MB
+              value: "512"
+            - name: SANDBOX_RUNNER_DEFAULT_CPU_PERCENT
+              value: "100"
+            - name: SANDBOX_RUNNER_DEFAULT_PIDS_MAX
+              value: "256"
+            - name: SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB
+              value: "0"
+            - name: SANDBOX_RUNNER_ENABLE_CGROUPS
+              value: "true"
+            - name: SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE
+              value: /tls/runner-registration/ca.crt
+            - name: SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE
+              value: /tls/runner-registration/tls.crt
+            - name: SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE
+              value: /tls/runner-registration/tls.key
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE
+              value: /tls/runner-control/tls.crt
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE
+              value: /tls/runner-control/tls.key
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE
+              value: /tls/runner-control/ca.crt
+          # The runner's HTTP listener serves TLS; the kubelet cannot present
+          # a client certificate, so the runner accepts probes without one.
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+              scheme: HTTPS
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: runner-registration-tls
+              mountPath: /tls/runner-registration
+              readOnly: true
+            - name: runner-control-tls
+              mountPath: /tls/runner-control
+              readOnly: true
+            - name: docker-data
+              mountPath: /var/lib/docker
+          resources:
+            {{- include "n8n.resources" (dict "preset" .Values.sandbox.runner.resourcesPreset "explicit" .Values.sandbox.runner.resources) | nindent 12 }}
+      volumes:
+        - name: runner-registration-tls
+          secret:
+            secretName: {{ printf "%s-sandbox-tls-runner-registration" .Release.Name }}
+        - name: runner-control-tls
+          secret:
+            secretName: {{ printf "%s-sandbox-tls-runner-control-server" .Release.Name }}
+        - name: docker-data
+          emptyDir:
+            sizeLimit: {{ .Values.sandbox.runner.dataRootSizeLimit | quote }}
+      {{- with .Values.sandbox.runner.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sandbox.runner.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
 {{- end }}

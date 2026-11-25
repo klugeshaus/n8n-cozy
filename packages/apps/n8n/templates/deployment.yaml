@@ -29,11 +29,6 @@ spec:
             - name: http
               containerPort: 5678
               protocol: TCP
-            {{- if .Values.sandbox.enabled }}
-            - name: broker
-              containerPort: 5679
-              protocol: TCP
-            {{- end }}
           env:
             - name: N8N_HOST
               value: {{ $host | quote }}
@@ -77,17 +72,21 @@ spec:
               value: {{ printf "http://%s-search:8080" .Release.Name | quote }}
             {{- end }}
             {{- if .Values.sandbox.enabled }}
-            - name: N8N_RUNNERS_MODE
-              value: "external"
-            - name: N8N_RUNNERS_BROKER_LISTEN_ADDRESS
-              value: "0.0.0.0"
-            - name: N8N_RUNNERS_AUTH_TOKEN
+            # Code Sandbox: point n8n at the sandbox service API. The shared
+            # admin API key is read from the <release>-credentials Secret,
+            # where the sandbox API reads it from as well (single source of
+            # truth; see secret.yaml and sandbox.yaml).
+            - name: N8N_INSTANCE_AI_SANDBOX_ENABLED
+              value: "true"
+            - name: N8N_INSTANCE_AI_SANDBOX_PROVIDER
+              value: "n8n-sandbox"
+            - name: N8N_SANDBOX_SERVICE_URL
+              value: {{ printf "http://%s-sandbox:8080" .Release.Name | quote }}
+            - name: N8N_SANDBOX_SERVICE_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Release.Name }}-credentials
-                  key: N8N_RUNNERS_AUTH_TOKEN
-            - name: N8N_NATIVE_PYTHON_RUNNER
-              value: "true"
+                  key: SANDBOX_API_KEY
             {{- end }}
           volumeMounts:
             - name: data

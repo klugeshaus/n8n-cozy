@@ -99,13 +99,13 @@ spec:
   secrets:
     exclude: []
     include:
-      - resourceNames: ["n8n-{{ .name }}-credentials", "n8n-{{ .name }}-search-config"]
+      - resourceNames: ["n8n-{{ .name }}-credentials", "n8n-{{ .name }}-search-config", "n8n-{{ .name }}-sandbox-auth", "n8n-{{ .name }}-sandbox-ca", "n8n-{{ .name }}-sandbox-tls-api-registration", "n8n-{{ .name }}-sandbox-tls-api-control-client", "n8n-{{ .name }}-sandbox-tls-runner-registration", "n8n-{{ .name }}-sandbox-tls-runner-control-server"]
       - matchLabels:
           internal.cozystack.io/tenant-ca: "true"
   services:
     exclude: []
     include:
-      - resourceNames: ["n8n-{{ .name }}", "n8n-{{ .name }}-broker", "n8n-{{ .name }}-search"]
+      - resourceNames: ["n8n-{{ .name }}", "n8n-{{ .name }}-sandbox", "n8n-{{ .name }}-sandbox-runner", "n8n-{{ .name }}-search"]
   ingresses:
     exclude: []
     include:
@@ -187,6 +187,13 @@ def self_validate(content: str, ps_name: str) -> None:
         sec_names = [n for sel in sec for n in (sel.get("resourceNames") or [])]
         assert "n8n-{{ .name }}-search-config" in sec_names, \
             "spec.secrets.include is missing the SearXNG config Secret"
+        assert "n8n-{{ .name }}-sandbox-auth" in sec_names, \
+            "spec.secrets.include is missing the sandbox auth Secret"
+        svc = (selectors.get("services") or {}).get("include") or []
+        svc_names = [n for sel in svc for n in (sel.get("resourceNames") or [])]
+        for name in ("n8n-{{ .name }}-sandbox", "n8n-{{ .name }}-sandbox-runner"):
+            assert name in svc_names, \
+                f"spec.services.include is missing the sandbox Service {name}"
 
 
 def main() -> int:

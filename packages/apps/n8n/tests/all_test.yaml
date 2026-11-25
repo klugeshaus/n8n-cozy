@@ -6,29 +6,38 @@ set:
   sandbox.enabled: true
   search.enabled: true
 tests:
-  - it: renders the task runner Deployment alongside n8n
+  - it: renders the sandbox API Deployment alongside n8n
     template: templates/sandbox.yaml
-    documentSelector:
-      path: kind
-      value: Deployment
+    documentIndex: 10
     asserts:
       - isKind:
           of: Deployment
       - equal:
           path: metadata.name
-          value: n8n-test-runner
+          value: n8n-test-sandbox
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: n8nio/n8n-sandbox-service-api:1.16.0
 
-  - it: renders the task broker Service alongside n8n
+  - it: renders the sandbox API Service alongside n8n
     template: templates/sandbox.yaml
-    documentSelector:
-      path: kind
-      value: Service
+    documentIndex: 8
     asserts:
       - isKind:
           of: Service
       - equal:
           path: metadata.name
-          value: n8n-test-broker
+          value: n8n-test-sandbox
+
+  - it: renders the runner StatefulSet
+    template: templates/sandbox.yaml
+    documentIndex: 11
+    asserts:
+      - isKind:
+          of: StatefulSet
+      - equal:
+          path: metadata.name
+          value: n8n-test-sandbox-runner
 
   - it: renders the SearXNG Deployment
     template: templates/search.yaml
@@ -54,19 +63,24 @@ tests:
           path: metadata.name
           value: n8n-test-search
 
-  - it: configures the main Deployment for both external runners and SearXNG
+  - it: configures the main Deployment for both the sandbox service and SearXNG
     template: templates/deployment.yaml
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: N8N_RUNNERS_MODE
-            value: external
+            name: N8N_INSTANCE_AI_SANDBOX_ENABLED
+            value: "true"
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: N8N_NATIVE_PYTHON_RUNNER
-            value: "true"
+            name: N8N_INSTANCE_AI_SANDBOX_PROVIDER
+            value: n8n-sandbox
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: N8N_SANDBOX_SERVICE_URL
+            value: http://n8n-test-sandbox:8080
       - contains:
           path: spec.template.spec.containers[0].env
           content:

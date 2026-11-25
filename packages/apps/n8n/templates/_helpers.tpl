@@ -23,9 +23,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/*
   Selectors for the n8n main pod ONLY. Use these for the main Deployment's
-  matchLabels/pod labels, its Service, the task broker Service and the
-  WorkloadMonitor. Kubernetes Service selectors are inclusive: reusing the
-  generic n8n.selectorLabels would also match the task-runner and SearXNG
+  matchLabels/pod labels, its Service and the WorkloadMonitor. Kubernetes
+  Service selectors are inclusive: reusing the generic n8n.selectorLabels
+  would also match the sandbox API and sandbox runner pods, and the SearXNG
   pods (whose labels only differ by `app.kubernetes.io/component`).
 */}}
 {{- define "n8n.mainSelectorLabels" -}}
