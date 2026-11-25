@@ -33,19 +33,30 @@
 {{- fail "sandbox.runner.capacityTotal is required: set the maximum number of concurrent sandboxes per runner replica, sized for your node pool." }}
 {{- end }}
 
-{{/* Self-signed CA, generated once and preserved via lookup. */}}
+{{/* TLS-ALWAYS-EMIT: the CA and all four leaf Secrets are emitted on EVERY
+  render, never conditionally. Helm removes any resource that disappears from
+  a release manifest, so emitting them only when `lookup` finds them absent
+  makes the NEXT upgrade delete the very Secrets the previous render created.
+  Values are still preserved: reuse the live Secret.data when it exists and
+  generate only when it does not. */}}
 {{- $ca := "" }}
-{{- $genCA := false }}
+{{- $caCertB64 := "" }}
+{{- $caKeyB64 := "" }}
+{{- $caReused := false }}
 {{- $caSecret := lookup "v1" "Secret" $ns $caName }}
 {{- if and $caSecret $caSecret.data }}
 {{- /* Sprig buildCustomCert expects base64-encoded PEM (it decodes internally).
        Secret.data values are already base64, so pass them through unchanged. */}}
-{{- $ca = buildCustomCert (index $caSecret.data "tls.crt") (index $caSecret.data "tls.key") }}
+{{- $caCertB64 = index $caSecret.data "tls.crt" | default "" }}
+{{- $caKeyB64 = index $caSecret.data "tls.key" | default "" }}
+{{- $ca = buildCustomCert $caCertB64 $caKeyB64 }}
+{{- $caReused = true }}
 {{- else }}
 {{- $ca = genCA "sandbox-ca" 3650 }}
-{{- $genCA = true }}
+{{- $caCertB64 = $ca.Cert | b64enc }}
+{{- $caKeyB64 = $ca.Key | b64enc }}
 {{- end }}
-{{- if $genCA }}
+---
 apiVersion: v1
 kind: Secret
 metadata:
@@ -55,19 +66,19 @@ metadata:
     app.kubernetes.io/component: sandbox
 type: Opaque
 data:
-  tls.crt: {{ $ca.Cert | b64enc }}
-  tls.key: {{ $ca.Key | b64enc }}
-{{- end }}
+  tls.crt: {{ $caCertB64 }}
+  tls.key: {{ $caKeyB64 }}
 
 {{/*
-  Four leaf certificates, one per mTLS role, each signed by the CA above and
-  preserved via lookup (a leaf is only rendered while it does not exist yet):
+  Four leaf certificates, one per mTLS role, each signed by the CA above:
     api-registration      — API server cert for runner registration (gRPC :9090)
     api-control-client    — API client cert for runner control connections
     runner-registration   — runner client cert for API registration
     runner-control-server — runner server cert for API control (gRPC :9091)
   Each Secret carries tls.crt / tls.key / ca.crt, mirroring the upstream
-  chart's tls.certificates.* keys.
+  chart's tls.certificates.* keys. A leaf is regenerated when the CA was just
+  regenerated (so the chain always matches) and otherwise preserved from the
+  live Secret.data — but the document itself is ALWAYS rendered.
 */}}
 {{- $apiDns := list $apiName (printf "%s.%s" $apiName $ns) (printf "%s.%s.svc" $apiName $ns) (printf "%s.%s.svc.cluster.local" $apiName $ns) }}
 {{- $runnerDns := list $runnerName (printf "%s.%s" $runnerName $ns) (printf "%s.%s.svc" $runnerName $ns) (printf "%s.%s.svc.cluster.local" $runnerName $ns) (printf "*.%s.%s.svc.cluster.local" $runnerName $ns) }}
@@ -80,8 +91,16 @@ data:
 {{- $name := printf "%s-sandbox-tls-%s" $.Release.Name $slot.slot }}
 {{- $cn := $slot.cn | trunc 64 | trimSuffix "-" }}
 {{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}
-{{- if not $existing }}
+{{- $leafCertB64 := "" }}
+{{- $leafKeyB64 := "" }}
+{{- if and $caReused $existing $existing.data }}
+{{- $leafCertB64 = index $existing.data "tls.crt" | default "" }}
+{{- $leafKeyB64 = index $existing.data "tls.key" | default "" }}
+{{- else }}
 {{- $leaf := genSignedCert $cn nil $slot.dns 365 $ca }}
+{{- $leafCertB64 = $leaf.Cert | b64enc }}
+{{- $leafKeyB64 = $leaf.Key | b64enc }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Secret
@@ -92,10 +111,9 @@ metadata:
     app.kubernetes.io/component: sandbox
 type: Opaque
 data:
-  tls.crt: {{ $leaf.Cert | b64enc }}
-  tls.key: {{ $leaf.Key | b64enc }}
-  ca.crt: {{ $ca.Cert | b64enc }}
-{{- end }}
+  tls.crt: {{ $leafCertB64 }}
+  tls.key: {{ $leafKeyB64 }}
+  ca.crt: {{ $caCertB64 }}
 {{- end }}
 
 {{/*

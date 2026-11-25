@@ -509,6 +509,15 @@ def check_render_matrix(c: Check):
     if re.search(r"\{\{- with \.Values\.sandbox\.runner\.nodeSelector \}\}", tls_src) \
             and "eq .Values.sandbox.runner.isolation \"sysbox\"" not in tls_src:
         c.fail("runner nodeSelector is not gated on sysbox isolation (strands privileged runners)")
+    # The CA + 4 leaf Secrets MUST be emitted on EVERY render, otherwise Helm
+    # deletes them on the second upgrade (lookup finds them -> omitted) and the
+    # runner pod fails with MountVolume.SetUp secret not found.
+    if "TLS-ALWAYS-EMIT" not in tls_src:
+        c.fail("sandbox.yaml lost the TLS-ALWAYS-EMIT marker (unconditional TLS Secret emission)")
+    if re.search(r"\{\{-?\s*if \$genCA\s*\}\}", tls_src):
+        c.fail("sandbox.yaml still gates the CA Secret emission on $genCA")
+    if re.search(r"\{\{-?\s*if not \$existing\s*\}\}", tls_src):
+        c.fail("sandbox.yaml still gates leaf Secret emission on $existing")
 
     cases = [
         ("default", (), 8),
