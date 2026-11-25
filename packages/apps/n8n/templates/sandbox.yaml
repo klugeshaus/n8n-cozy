@@ -19,7 +19,7 @@
   Env names, TLS mount layout and probes follow upstream
   n8n-io/n8n-sandbox-service @ service/v1.16.0 (charts/n8n-sandbox-service).
 */}}
-{{- if .Values.sandbox.enabled }}
+{{- if and .Values.sandbox.enabled (not .Values.sandbox.external.enabled) }}
 {{- $ns := .Release.Namespace }}
 {{- $apiName := printf "%s-sandbox" .Release.Name }}
 {{- $runnerName := printf "%s-sandbox-runner" .Release.Name }}

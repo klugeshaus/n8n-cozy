@@ -1,0 +1,28 @@
+# -----------------------------------------------------------------------------
+# VMDisk — boot disk for the dedicated n8n sandbox VM.
+#
+# Cozystack's CDI DataSources/DataImportCrons are empty on this cluster, so
+# `spec.source.http.url` is the reliable image source (a DataSource `image.name`
+# reference would resolve to nothing). The URL must point at a qcow2 or raw
+# cloud image; swap it for any Ubuntu Noble (or newer) server cloud image.
+# -----------------------------------------------------------------------------
+
+# n8n sandbox VM — root disk (Ubuntu 24.04 "Noble" server cloud image).
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMDisk
+metadata:
+  name: n8n-sandbox-vmdisk
+  # Apply into the tenant namespace that will also run the VMInstance and the
+  # n8n app: kubectl -n <tenant-namespace> apply -f deploy/sandbox-vm/vmdisk.yaml
+spec:
+  source:
+    http:
+      # CHANGE_ME (optional): any qcow2/raw Ubuntu cloud image URL reachable
+      # from the cluster. Noble "current" is a moving tag — pin a concrete
+      # dated release for reproducibility if you prefer.
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+  optical: false
+  storage: 40Gi
+  storageClass: replicated
+  # Import immediately on creation instead of waiting for the first consumer.
+  bindImmediately: true

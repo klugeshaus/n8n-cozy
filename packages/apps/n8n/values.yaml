@@ -125,6 +125,17 @@ sandbox:
   ## @param {string} runnerRegistrationToken - Token the runners use to register with the API. Empty generates one and preserves it across upgrades.
   runnerRegistrationToken: ""
 
+  ## @typedef {struct} SandboxExternal - Point n8n at a sandbox service running OUTSIDE this chart, e.g. on a dedicated Cozystack Ubuntu VM (see deploy/sandbox-vm). When enabled, this chart renders no in-cluster sandbox service; it only sets the four n8n env vars.
+  ## @field {bool} enabled - Skip the in-cluster sandbox API and runners and use `url` / `apiKey` instead.
+  ## @field {string} url - Plain-HTTP URL of the external sandbox API, reachable from the n8n pod (e.g. `http://<vm-address>:8080`).
+  ## @field {string} apiKey - Admin API key; must match a value in `SANDBOX_API_KEYS` on the external API.
+
+  ## @param {SandboxExternal} external - Use an externally hosted sandbox service (automatic VM mode). Disabled by default.
+  external:
+    enabled: false
+    url: ""
+    apiKey: ""
+
   ## @param {SandboxApi} api - Sandbox service API.
   api:
     image:

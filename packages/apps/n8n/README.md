@@ -35,6 +35,9 @@ The deployment guide lives in the top-level repository README; this document is 
 | `sandbox.enabled` | `false` | Deploy the sandbox API, its TLS/auth/config resources and the runner StatefulSet, and wire n8n to the API. |
 | `sandbox.apiKey` | `""` | API key shared by n8n (`N8N_SANDBOX_SERVICE_API_KEY`) and the API (`SANDBOX_API_KEYS`). Empty → generated once and preserved via `lookup`. |
 | `sandbox.runnerRegistrationToken` | `""` | `SANDBOX_API_RUNNER_REGISTRATION_TOKEN`. Empty → generated once and preserved via `lookup`. |
+| `sandbox.external.enabled` | `false` | Use an external sandbox API instead of rendering any in-cluster sandbox resources. |
+| `sandbox.external.url` | `""` | Base URL of the external API, reachable from n8n over plain HTTP (e.g. `http://<vm-address>:8080`). |
+| `sandbox.external.apiKey` | `""` | API key for the external API; must match a value in its `SANDBOX_API_KEYS`. |
 | `sandbox.api.image.repository` | `n8nio/n8n-sandbox-service-api` | Sandbox API image. |
 | `sandbox.api.image.tag` | `1.16.0` | Sandbox API image tag. |
 | `sandbox.api.replicas` | `1` | API replicas (SQLite backend; keep 1). |
@@ -54,6 +57,22 @@ The deployment guide lives in the top-level repository README; this document is 
 | `sandbox.runner.tolerations` | `[{key: sysbox-runtime, operator: Equal, value: not-running, effect: NoSchedule}]` | Tolerations matching the Sysbox installer taint. |
 | `sandbox.runner.resourcesPreset` | `t1.medium` | Sizing preset for the runner container. |
 | `sandbox.runner.resources.cpu` / `.memory` | `""` | Explicit overrides for the runner container. |
+
+#### External sandbox VM (real Sysbox on Cozystack)
+
+On clusters whose nodes cannot run Sysbox (e.g. **Talos**, which has a read-only
+root filesystem), a dedicated Ubuntu VM is the only way to get real Sysbox
+isolation. Set `sandbox.enabled=true` + `sandbox.external.enabled=true` plus
+`sandbox.external.url` / `sandbox.external.apiKey`; the chart then renders **no**
+in-cluster sandbox objects and only sets the four `N8N_*SANDBOX*` env vars as
+plain values.
+
+[`deploy/sandbox-vm/README.md`](../../deploy/sandbox-vm/README.md) contains
+Cozystack `VMDisk` + `VMInstance` manifests that auto-provision that Ubuntu VM
+(KubeVirt + CDI + cloud-init) running **both** the sandbox API and a privileged
+DinD runner with local mTLS — n8n docs "Setup 3: Bundled sandbox". Apply the VM
+first, verify `curl http://<vm-address>:8080/healthz` returns `{"status":"ok"}`,
+then set the values above.
 
 ### Search (`search.*`)
 

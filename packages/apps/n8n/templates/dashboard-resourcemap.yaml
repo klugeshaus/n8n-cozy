@@ -15,7 +15,7 @@ rules:
     resources: ["services"]
     resourceNames:
       - {{ .Release.Name | quote }}
-      {{- if .Values.sandbox.enabled }}
+      {{- if and .Values.sandbox.enabled (not .Values.sandbox.external.enabled) }}
       - {{ printf "%s-sandbox" .Release.Name | quote }}
       {{- if .Values.sandbox.runner.enabled }}
       - {{ printf "%s-sandbox-runner" .Release.Name | quote }}
@@ -29,7 +29,7 @@ rules:
     resources: ["secrets"]
     resourceNames:
       - {{ printf "%s-credentials" .Release.Name | quote }}
-      {{- if .Values.sandbox.enabled }}
+      {{- if and .Values.sandbox.enabled (not .Values.sandbox.external.enabled) }}
       - {{ printf "%s-sandbox-auth" .Release.Name | quote }}
       - {{ printf "%s-sandbox-ca" .Release.Name | quote }}
       {{- end }}

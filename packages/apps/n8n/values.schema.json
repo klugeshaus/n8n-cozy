@@ -169,6 +169,28 @@
           "type": "string",
           "default": ""
         },
+        "external": {
+          "description": "External sandbox service: when enabled the chart renders no in-cluster sandbox resources and points n8n at a sandbox API running elsewhere (e.g. the Cozystack VM in deploy/sandbox-vm). Disabled by default.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "enabled": {
+              "description": "Use an external sandbox API instead of deploying the sandbox service in this instance.",
+              "type": "boolean",
+              "default": false
+            },
+            "url": {
+              "description": "Base URL of the external sandbox API, reachable from n8n over plain HTTP, e.g. http://10.244.1.50:8080.",
+              "type": "string",
+              "default": ""
+            },
+            "apiKey": {
+              "description": "API key for the external sandbox API. Must match a value in the external service SANDBOX_API_KEYS.",
+              "type": "string",
+              "default": ""
+            }
+          }
+        },
         "api": {
           "description": "Sandbox service API.",
           "type": "object",
@@ -383,11 +405,21 @@
               "items": {
                 "type": "object",
                 "properties": {
-                  "key": { "type": "string" },
-                  "operator": { "type": "string" },
-                  "value": { "type": "string" },
-                  "effect": { "type": "string" },
-                  "tolerationSeconds": { "type": "integer" }
+                  "key": {
+                    "type": "string"
+                  },
+                  "operator": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  },
+                  "effect": {
+                    "type": "string"
+                  },
+                  "tolerationSeconds": {
+                    "type": "integer"
+                  }
                 }
               },
               "default": [

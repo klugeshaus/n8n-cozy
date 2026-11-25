@@ -1,0 +1,340 @@
+#cloud-config
+# -----------------------------------------------------------------------------
+# n8n sandbox VM — cloud-init user-data (Cozystack VMInstance).
+#
+# This document is mirrored verbatim (indented) into the `cloudInit` block
+# scalar in vminstance.yaml — that file is the one that gets applied. Keep the
+# two in sync (or re-embed this file into vminstance.yaml after editing).
+#
+# It provisions the WHOLE n8n sandbox service on a dedicated Ubuntu VM,
+# mirroring the upstream n8n-io/n8n-sandbox-service @ service/v1.16.0 chart
+# (see packages/apps/n8n/templates/sandbox.yaml for the in-chart replica):
+#
+#   n8n pod (cluster)  --plain HTTP-->  sandbox-api  (:8080, published)
+#                                       |  mTLS gRPC :9090 / :9091 (local only)
+#                                       sandbox-runner (privileged Docker-in-Docker)
+#
+# All environment variable names are copied from
+# packages/apps/n8n/templates/sandbox.yaml (upstream service/v1.16.0).
+# -----------------------------------------------------------------------------
+hostname: n8n-sandbox
+manage_etc_hosts: true
+
+package_update: true
+packages:
+  # docker-compose-v2 provides the `docker compose` plugin in the Ubuntu
+  # archive (docker-compose-plugin is the equivalent package name in the
+  # Docker CE repository).
+  - docker.io
+  - docker-compose-v2
+  - openssl
+  - curl
+
+write_files:
+  # ---------------------------------------------------------------------------
+  # Shared secrets. Both compose services read their values from here via
+  # ${VAR} interpolation in docker-compose.yml (compose reads .env from the
+  # project directory, i.e. /opt/sandbox).
+  #
+  # >>> EDIT ME BEFORE APPLYING vminstance.yaml <<<
+  #   SANDBOX_API_KEYS is the ADMIN key: n8n must present the SAME value as
+  #   `sandbox.external.apiKey` in the n8n chart values. Replace the
+  #   placeholder below with a long random string (e.g. `openssl rand -hex 24`).
+  #
+  #   The two runner secrets may stay as placeholders: on first boot
+  #   /opt/sandbox/bootstrap-mtls.sh replaces CHANGE_ME_* values with freshly
+  #   generated random secrets.
+  # ---------------------------------------------------------------------------
+  - path: /opt/sandbox/.env
+    owner: root:root
+    permissions: '0600'
+    defer: false
+    content: |
+      # n8n sandbox service — shared secrets (docker compose project /opt/sandbox).
+      #
+      # ADMIN key shared with n8n -> set the same value as
+      # sandbox.external.apiKey in the n8n chart values.
+      SANDBOX_API_KEYS=CHANGE_ME_SANDBOX_ADMIN_KEY
+      # Runner-facing secrets (must match on both containers; auto-generated
+      # on first boot when left as CHANGE_ME_*).
+      SANDBOX_API_RUNNER_REGISTRATION_TOKEN=CHANGE_ME_RUNNER_REGISTRATION_TOKEN
+      SANDBOX_API_RUNNER_API_KEY=CHANGE_ME_RUNNER_API_KEY
+
+  # ---------------------------------------------------------------------------
+  # Docker Compose definition of the sandbox service. Service names
+  # (sandbox-api, sandbox-runner) double as DNS names on the compose network
+  # and as the DNS identities baked into the mTLS certificates.
+  # ---------------------------------------------------------------------------
+  - path: /opt/sandbox/docker-compose.yml
+    owner: root:root
+    permissions: '0644'
+    defer: false
+    content: |
+      name: sandbox
+      services:
+        sandbox-api:
+          image: n8nio/n8n-sandbox-service-api:1.16.0
+          container_name: sandbox-api
+          restart: unless-stopped
+          ports:
+            - "8080:8080"   # HTTP API — n8n points here (plain HTTP)
+            - "9090:9090"   # registration gRPC (mTLS) — local to the VM
+          environment:
+            # --- static API config (names copied from the n8n chart) ---
+            SANDBOX_API_LISTEN_ADDR: ":8080"
+            SANDBOX_API_GRPC_LISTEN_ADDR: ":9090"
+            SANDBOX_API_STORE: "sqlite"
+            SANDBOX_API_DATA_DIR: "/tmp/sandbox-api"
+            SANDBOX_API_MAX_FILE_BYTES: "10485760"
+            SANDBOX_API_DEFAULT_MAX_SANDBOXES: "50"
+            SANDBOX_API_MAX_INFLIGHT_PER_TENANT: "512"
+            SANDBOX_API_ENABLE_CORS: "false"
+            SANDBOX_API_RUNNER_HEARTBEAT_GRACE: "45s"
+            SANDBOX_API_IDLE_STOP_AFTER: "1h"
+            SANDBOX_API_IDLE_DELETE_AFTER: "24h"
+            SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER: "1m"
+            SANDBOX_API_IDLE_SWEEP_INTERVAL: "1m"
+            # --- secrets (interpolated from /opt/sandbox/.env) ---
+            SANDBOX_API_KEYS: ${SANDBOX_API_KEYS}
+            SANDBOX_API_PROVISIONER_KEYS: ""
+            SANDBOX_API_SCALER_KEYS: ""
+            SANDBOX_API_RUNNER_REGISTRATION_TOKEN: ${SANDBOX_API_RUNNER_REGISTRATION_TOKEN}
+            SANDBOX_API_RUNNER_API_KEY: ${SANDBOX_API_RUNNER_API_KEY}
+            # --- mTLS material (mounted read-only below) ---
+            # registration gRPC server cert
+            SANDBOX_API_GRPC_TLS_CERT_FILE: /certs/api-grpc-server.crt
+            SANDBOX_API_GRPC_TLS_KEY_FILE: /certs/api-grpc-server.key
+            SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE: /certs/ca.crt
+            # client cert for the API's control connections to the runner
+            SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE: /certs/ca.crt
+            SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /certs/api-control-client.crt
+            SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /certs/api-control-client.key
+          volumes:
+            - /opt/sandbox/certs:/certs:ro
+            - sandbox-api-data:/tmp/sandbox-api
+          networks: [sandbox]
+          healthcheck:
+            # curl with a wget fallback; `|| true` never: a failure must fail.
+            test: ["CMD-SHELL", "curl -fsS http://localhost:8080/healthz || wget -qO- http://localhost:8080/healthz"]
+            interval: 10s
+            timeout: 5s
+            retries: 12
+            start_period: 15s
+
+        sandbox-runner:
+          image: n8nio/n8n-sandbox-service-runner-dind:1.16.0
+          container_name: sandbox-runner
+          restart: unless-stopped
+          privileged: true   # Docker-in-Docker: this is the point of the VM
+          depends_on:
+            - sandbox-api
+          environment:
+            # --- static runner config (names copied from the n8n chart) ---
+            SANDBOX_RUNNER_ID: sandbox-runner
+            SANDBOX_RUNNER_API_GRPC_ADDR: sandbox-api:9090
+            # The runner's HTTP listener serves TLS; the API dials it back.
+            SANDBOX_RUNNER_HTTP_BASE_URL: https://sandbox-runner:8080
+            SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: sandbox-runner:9091
+            SANDBOX_RUNNER_DOCKER_HOST: unix:///var/run/docker.sock
+            SANDBOX_RUNNER_LISTEN_ADDR: ":8080"
+            SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: ":9091"
+            SANDBOX_RUNNER_DATA_DIR: /var/sandboxes
+            # Max concurrent sandboxes on this runner. u1.medium (4 vCPU /
+            # 4 GiB) comfortably sustains 8 with the 512 MiB default below;
+            # raise/lower together with SANDBOX_RUNNER_DEFAULT_MEMORY_MB.
+            SANDBOX_RUNNER_CAPACITY_TOTAL: "8"
+            SANDBOX_RUNNER_MAX_FILE_BYTES: "10485760"
+            SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX: "256"
+            SANDBOX_RUNNER_MAX_EXEC_TIMEOUT: "15m"
+            SANDBOX_RUNNER_DEFAULT_MEMORY_MB: "512"
+            SANDBOX_RUNNER_DEFAULT_CPU_PERCENT: "100"
+            SANDBOX_RUNNER_DEFAULT_PIDS_MAX: "256"
+            SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB: "0"
+            SANDBOX_RUNNER_ENABLE_CGROUPS: "true"
+            # --- secrets (same values as the API, from /opt/sandbox/.env) ---
+            SANDBOX_RUNNER_REGISTRATION_TOKEN: ${SANDBOX_API_RUNNER_REGISTRATION_TOKEN}
+            SANDBOX_RUNNER_API_KEYS: ${SANDBOX_API_RUNNER_API_KEY}
+            # --- mTLS material (mounted read-only below) ---
+            # client cert used to register with the API
+            SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE: /certs/ca.crt
+            SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE: /certs/runner-grpc-client.crt
+            SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE: /certs/runner-grpc-client.key
+            # control gRPC server cert (the API connects here)
+            SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /certs/runner-control-server.crt
+            SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /certs/runner-control-server.key
+            SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE: /certs/ca.crt
+            # The sandbox base image executed for every Code node run.
+            SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: n8nio/n8n-sandbox-service-sandbox:1.16.0
+          volumes:
+            - /opt/sandbox/certs:/certs:ro
+            - sandbox-runner-docker:/var/lib/docker
+            - sandbox-runner-data:/var/sandboxes
+          networks: [sandbox]
+
+      networks:
+        sandbox:
+          name: sandbox
+
+      volumes:
+        sandbox-api-data:
+        sandbox-runner-docker:
+        sandbox-runner-data:
+
+  # ---------------------------------------------------------------------------
+  # One-shot mTLS PKI + secret bootstrap. Idempotent: exits 0 without
+  # regenerating certificates when /opt/sandbox/certs/ca.crt already exists.
+  #
+  # Mirrors the four TLS roles the n8n chart renders as TLS Secrets
+  # (packages/apps/n8n/templates/sandbox.yaml):
+  #   api-grpc-server        API *server* cert for runner registration (:9090)
+  #   api-control-client     API *client* cert for runner control connections
+  #   runner-grpc-client     runner *client* cert for API registration
+  #   runner-control-server  runner *server* cert for API control (:9091)
+  # ---------------------------------------------------------------------------
+  - path: /opt/sandbox/bootstrap-mtls.sh
+    owner: root:root
+    permissions: '0700'
+    defer: false
+    content: |
+      #!/usr/bin/env bash
+      #
+      # bootstrap-mtls.sh — self-signed PKI + shared secrets for the n8n
+      # sandbox service running under docker compose in /opt/sandbox.
+      #
+      # DNS identities on the compose network: sandbox-api, sandbox-runner.
+      # All material lives in /opt/sandbox/certs, mounted read-only into both
+      # containers at /certs.
+      #
+      # Idempotent: exits 0 without regenerating anything once
+      # /opt/sandbox/certs/ca.crt exists.
+      set -euo pipefail
+
+      CERT_DIR="/opt/sandbox/certs"
+      ENV_FILE="/opt/sandbox/.env"
+      DAYS=3650
+
+      log() { echo "[bootstrap-mtls] $*"; }
+
+      # ---------------------------------------------------------------------
+      # Shared secrets (/opt/sandbox/.env)
+      # ---------------------------------------------------------------------
+      # Runner-facing secrets: replace CHANGE_ME_* placeholders with random
+      # values. The admin key (SANDBOX_API_KEYS) is shared with n8n; if it is
+      # still a placeholder we generate one and drop a note file, because n8n
+      # needs the same value as sandbox.external.apiKey.
+      ensure_secret() {
+        local key="$1" current generated
+        current="$(grep -m1 -E "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+        if [[ -z "$current" || "$current" == CHANGE_ME* ]]; then
+          generated="$(openssl rand -hex 24)"
+          if grep -qE "^${key}=" "$ENV_FILE" 2>/dev/null; then
+            sed -i "s|^${key}=.*|${key}=${generated}|" "$ENV_FILE"
+          else
+            echo "${key}=${generated}" >> "$ENV_FILE"
+          fi
+          log "generated ${key}"
+        fi
+      }
+
+      mkdir -p "$CERT_DIR"
+      touch "$ENV_FILE"
+      chmod 600 "$ENV_FILE"
+
+      ensure_secret SANDBOX_API_RUNNER_REGISTRATION_TOKEN
+      ensure_secret SANDBOX_API_RUNNER_API_KEY
+
+      admin_key="$(grep -m1 -E '^SANDBOX_API_KEYS=' "$ENV_FILE" | cut -d= -f2- || true)"
+      if [[ -z "$admin_key" || "$admin_key" == CHANGE_ME* ]]; then
+        ensure_secret SANDBOX_API_KEYS
+        (umask 077 && grep -E '^SANDBOX_API_KEYS=' "$ENV_FILE" > /opt/sandbox/ADMIN_KEY.note)
+        log "WARNING: SANDBOX_API_KEYS was a placeholder -> generated a random admin key."
+        log "         It is stored in /opt/sandbox/.env and /opt/sandbox/ADMIN_KEY.note"
+        log "         (root-only). Retrieve it via SSH and use it as"
+        log "         sandbox.external.apiKey in the n8n chart values. Prefer"
+        log "         setting it explicitly in the cloudInit .env block instead."
+      fi
+
+      # ---------------------------------------------------------------------
+      # mTLS material
+      # ---------------------------------------------------------------------
+      if [[ -s "$CERT_DIR/ca.crt" ]]; then
+        log "$CERT_DIR/ca.crt already exists — leaving certificates untouched."
+        exit 0
+      fi
+
+      log "generating CA and leaf certificates in $CERT_DIR"
+
+      # CA. SANs cover every peer name that may be verified on the VM.
+      openssl req -x509 -newkey rsa:2048 -nodes -days "$DAYS" \
+        -keyout "$CERT_DIR/ca.key" -out "$CERT_DIR/ca.crt" \
+        -subj "/CN=sandbox-ca" \
+        -addext "subjectAltName=DNS:sandbox-api,DNS:sandbox-runner,DNS:localhost" \
+        -addext "basicConstraints=critical,CA:TRUE" \
+        -addext "keyUsage=critical,keyCertSign,cRLSign"
+
+      issue_leaf() {
+        local name="$1" cn="$2" sans="$3"
+        openssl req -newkey rsa:2048 -nodes \
+          -keyout "$CERT_DIR/${name}.key" -out "$CERT_DIR/${name}.csr" \
+          -subj "/CN=${cn}"
+        cat > "$CERT_DIR/${name}.ext" <<EXT
+      basicConstraints=CA:FALSE
+      keyUsage=critical,digitalSignature,keyEncipherment
+      extendedKeyUsage=serverAuth,clientAuth
+      subjectAltName=${sans}
+      EXT
+        openssl x509 -req -sha256 -days "$DAYS" \
+          -in "$CERT_DIR/${name}.csr" \
+          -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" -CAcreateserial \
+          -extfile "$CERT_DIR/${name}.ext" \
+          -out "$CERT_DIR/${name}.crt"
+        rm -f "$CERT_DIR/${name}.csr" "$CERT_DIR/${name}.ext"
+      }
+
+      issue_leaf api-grpc-server "sandbox-api" "DNS:sandbox-api,DNS:localhost,IP:127.0.0.1"
+      issue_leaf api-control-client "sandbox-api-control-client" "DNS:sandbox-api"
+      issue_leaf runner-grpc-client "sandbox-runner-registration-client" "DNS:sandbox-runner"
+      issue_leaf runner-control-server "sandbox-runner" "DNS:sandbox-runner,DNS:localhost,IP:127.0.0.1"
+
+      chmod 644 "$CERT_DIR"/*.crt
+      chmod 600 "$CERT_DIR"/*.key "$CERT_DIR/ca.key"
+
+      log "mTLS material ready under $CERT_DIR:"
+      log "  ca.crt                           trust anchor for both peers"
+      log "  api-grpc-server.{crt,key}        API registration server (:9090)"
+      log "  api-control-client.{crt,key}     API control client"
+      log "  runner-grpc-client.{crt,key}     runner registration client"
+      log "  runner-control-server.{crt,key}  runner control server (:9091)"
+
+  # ---------------------------------------------------------------------------
+  # Re-run `docker compose up -d` on every boot so the service survives VM
+  # reboots even if the containers were not marked for auto-restart.
+  # ---------------------------------------------------------------------------
+  - path: /etc/systemd/system/sandbox-compose.service
+    owner: root:root
+    permissions: '0644'
+    defer: false
+    content: |
+      [Unit]
+      Description=n8n sandbox service (docker compose in /opt/sandbox)
+      After=docker.service network-online.target
+      Requires=docker.service
+      ConditionPathExists=/opt/sandbox/docker-compose.yml
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStartPre=/opt/sandbox/bootstrap-mtls.sh
+      ExecStart=/usr/bin/docker compose -f /opt/sandbox/docker-compose.yml up -d
+      ExecStartPost=/bin/sh -c 'date -Is > /opt/sandbox/READY'
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - systemctl enable --now docker
+  - usermod -aG docker ubuntu
+  - bash /opt/sandbox/bootstrap-mtls.sh
+  - docker compose -f /opt/sandbox/docker-compose.yml up -d
+  - systemctl enable sandbox-compose.service
+  - bash -c 'date -Is > /opt/sandbox/READY'

@@ -30,6 +30,9 @@ LICENSE                            MIT — free for anyone to use, modify and re
 Makefile                           convenience targets
 .gitignore
 deploy/package.yaml                non-interactive `Package` manifest
+deploy/sandbox-vm/                 optional Cozystack VMDisk + VMInstance that
+                                   auto-provision an Ubuntu VM running BOTH the
+                                   sandbox API and runner (external sandbox mode)
 hack/gen-appdef.py                 regenerates the ApplicationDefinition
 hack/verify.py / verify.sh         local `cozypkg validate` equivalent
 hack/package.mk                    no-op shim for the in-tree Makefiles
@@ -421,6 +424,40 @@ The chart refuses to render a privileged runner unless
 PSA label. On the cluster this repo was developed against, all four nodes are
 Talos, so this is the only usable mode there.
 
+#### Automatic sandbox VM (real Sysbox on Cozystack)
+
+**Yes — this can be automated.** Sysbox cannot be installed on Talos, so the
+only way to get real Sysbox isolation on this cluster is a dedicated Ubuntu VM.
+Cozystack ships KubeVirt + CDI and the `VMInstance` / `VMDisk` Marketplace
+application definitions, so a VM can be *declaratively* provisioned with a
+`VMInstance` CR (Ubuntu cloud image + cloud-init). See
+[deploy/sandbox-vm/README.md](deploy/sandbox-vm/README.md) for the manifests
+and step-by-step instructions.
+
+The chosen design avoids the complexity of upstream `dataPlane.mode: external`
+(which requires the API to dial back into the VM on 8080/9091 with DNS cert
+SANs, `volumeLocalUrl` and a load balancer): the VM runs **both** the sandbox
+API and the privileged Docker-in-Docker runner locally with mutual TLS on a
+private Docker network (n8n docs' "Setup 3: Bundled sandbox"). n8n then talks
+to the VM over a **single plain-HTTP hop**.
+
+Set these chart values instead of deploying the in-cluster sandbox service:
+
+| Value | Meaning |
+| --- | --- |
+| `sandbox.enabled` | `true` (still enables the four n8n env vars) |
+| `sandbox.external.enabled` | `true` — renders **no** in-cluster sandbox resources |
+| `sandbox.external.url` | `http://<vm-address>:8080`, reachable from the n8n pod |
+| `sandbox.external.apiKey` | must match `SANDBOX_API_KEYS` on the VM's sandbox API |
+
+With `external.enabled=true` the chart renders only the four
+`N8N_INSTANCE_AI_SANDBOX_*` / `N8N_SANDBOX_SERVICE_*` variables with the
+external URL/key as plain values; no Service, Deployment, StatefulSet, Secret
+or certificate for a sandbox is created. The default (external disabled) keeps
+the fully in-cluster sandbox service described above. Apply the VM CRs first,
+wait for `curl http://<vm-address>:8080/healthz` → `{"status":"ok"}`, then set
+the four values on the n8n instance.
+
 #### Sandbox service images and license
 
 The API and runner images (`n8nio/n8n-sandbox-service-api`,
@@ -534,6 +571,11 @@ installed. They are kept as YAML-parseable specs and are checked for syntax by
 The ApplicationDefinition's `secrets.include` and `services.include` selectors
 use the same `n8n-{{ .name }}` style, so the Dashboard's Secrets/Services tabs
 show exactly these objects.
+
+In **external sandbox mode** (`sandbox.external.enabled=true`) none of the
+`Code Sandbox` objects above are created — the chart renders only the four
+`N8N_*SANDBOX*` environment variables on the n8n Deployment, pointing at the
+[Ubuntu sandbox VM](deploy/sandbox-vm/README.md).
 
 ---
 

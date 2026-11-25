@@ -511,6 +511,11 @@ def check_render_matrix(c: Check):
                         "--set", "_namespace.host=example.org"), 23),
         ("wildcard", ("--set", "_cluster.wildcard-secret-name=wildcard-tls"), 8),
         ("preset", ("--set", "resourcesPreset=t1.medium"), 8),
+        ("external", ("--set", "sandbox.enabled=true",
+                      "--set", "sandbox.external.enabled=true",
+                      "--set", "sandbox.external.url=http://10.244.1.50:8080",
+                      "--set", "sandbox.external.apiKey=test-key-123",
+                      "--set", "search.enabled=true"), 11),
     ]
     rendered = {}
     for label, args, expected in cases:
@@ -691,8 +696,33 @@ def check_render_matrix(c: Check):
         if any(k.startswith("cert-manager.io") or k.startswith("acme.cert-manager.io")
                for k in anns):
             c.fail(f"wildcard case: cert-manager annotations must be omitted (got {sorted(anns)!r})")
-    c.ok("render matrix: 8/20/11/23/23/8/8 docs, sandbox service objects, "
-         "n8n env wiring, HTTPRoute switch, selector contract, preset matrix, wildcard TLS")
+    # i) external sandbox mode: the Cozystack VM (deploy/sandbox-vm) runs the
+    #    sandbox API, so the chart must render NO in-cluster sandbox objects and
+    #    wire n8n to the external URL/key with plain env values.
+    ext = rendered["external"]
+    if any("sandbox" in (d.get("metadata", {}).get("name") or "") for d in ext):
+        c.fail("external mode must not render any sandbox-* object")
+    ext_env = main_env(ext)
+    ext_expected = {
+        "N8N_INSTANCE_AI_SANDBOX_ENABLED": "true",
+        "N8N_INSTANCE_AI_SANDBOX_PROVIDER": "n8n-sandbox",
+        "N8N_SANDBOX_SERVICE_URL": "http://10.244.1.50:8080",
+        "N8N_SANDBOX_SERVICE_API_KEY": "test-key-123",
+    }
+    for name, value in ext_expected.items():
+        if name not in ext_env:
+            c.fail(f"external mode: n8n main is missing {name}")
+        elif ext_env[name].get("value") != value:
+            c.fail(f"external mode: {name} = {ext_env[name].get('value')!r}, expected {value!r}")
+    if (ext_env.get("N8N_SANDBOX_SERVICE_API_KEY") or {}).get("valueFrom"):
+        c.fail("external mode: API key must be a plain value, not a secretKeyRef")
+    if by_name(ext, "Service", "n8n-test-search") is None:
+        c.fail("external mode: search must still render when enabled")
+    if raw_contains(ext, "N8N_RUNNERS") or raw_contains(ext, "n8n-test-broker"):
+        c.fail("external render still contains task-runner / broker references")
+    c.ok("render matrix: 8/20/11/23/23/8/8/11 docs, sandbox service objects, "
+         "external mode, n8n env wiring, HTTPRoute switch, selector contract, "
+         "preset matrix, wildcard TLS")
 
 # --------------------------------------------------------------------------
 # 9. RD chart render
