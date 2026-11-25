@@ -500,6 +500,16 @@ def check_render_matrix(c: Check):
     ConfigMap/Service/Deployment/PVC and the runner Service/StatefulSet;
     enabling search adds its Secret/Service/Deployment.
     """
+    # Sprig buildCustomCert takes base64-encoded PEM and decodes it internally.
+    # Secret.data values are already base64, so b64dec before the call breaks
+    # every upgrade after the first install (lookup finds the CA Secret).
+    tls_src = (APPS_CHART / "templates" / "sandbox.yaml").read_text(encoding="utf-8")
+    if re.search(r"buildCustomCert[^\n]*b64dec", tls_src):
+        c.fail("sandbox.yaml decodes PEM before buildCustomCert; it expects raw base64")
+    if re.search(r"\{\{- with \.Values\.sandbox\.runner\.nodeSelector \}\}", tls_src) \
+            and "eq .Values.sandbox.runner.isolation \"sysbox\"" not in tls_src:
+        c.fail("runner nodeSelector is not gated on sysbox isolation (strands privileged runners)")
+
     cases = [
         ("default", (), 8),
         ("sandbox", ("--set", "sandbox.enabled=true"), 20),

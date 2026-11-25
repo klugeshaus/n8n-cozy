@@ -38,7 +38,9 @@
 {{- $genCA := false }}
 {{- $caSecret := lookup "v1" "Secret" $ns $caName }}
 {{- if and $caSecret $caSecret.data }}
-{{- $ca = buildCustomCert (index $caSecret.data "tls.crt" | b64dec) (index $caSecret.data "tls.key" | b64dec) }}
+{{- /* Sprig buildCustomCert expects base64-encoded PEM (it decodes internally).
+       Secret.data values are already base64, so pass them through unchanged. */}}
+{{- $ca = buildCustomCert (index $caSecret.data "tls.crt") (index $caSecret.data "tls.key") }}
 {{- else }}
 {{- $ca = genCA "sandbox-ca" 3650 }}
 {{- $genCA = true }}
@@ -506,6 +508,10 @@ spec:
         - name: docker-data
           emptyDir:
             sizeLimit: {{ .Values.sandbox.runner.dataRootSizeLimit | quote }}
+      {{- /* Sysbox placement only. The schema injects the sysbox defaults even when
+           isolation=privileged, where they would strand the runner on a nonexistent
+           "sysbox-install=yes" node. */}}
+      {{- if eq .Values.sandbox.runner.isolation "sysbox" }}
       {{- with .Values.sandbox.runner.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -513,6 +519,7 @@ spec:
       {{- with .Values.sandbox.runner.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- end }}
 {{- end }}
 {{- end }}
