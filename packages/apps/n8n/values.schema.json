@@ -310,7 +310,7 @@
           }
         },
         "runner": {
-          "description": "Sysbox runners that execute the generated code. Sysbox itself is installed once on a dedicated node pool (cluster prerequisite, see README).",
+          "description": "Runners that execute the generated code. The default privileged isolation runs on any node (including immutable-rootfs distributions such as Talos); sysbox is opt-in for clusters with a real Sysbox node pool.",
           "type": "object",
           "default": {},
           "properties": {
@@ -320,9 +320,9 @@
               "default": true
             },
             "isolation": {
-              "description": "sysbox (recommended; needs Sysbox on the node) or privileged (needed on immutable-rootfs distributions such as Talos).",
+              "description": "privileged (portable default; runs on any node, needs a PSA-privileged namespace) or sysbox (opt-in; needs Sysbox installed on a dedicated node pool).",
               "type": "string",
-              "default": "sysbox",
+              "default": "privileged",
               "enum": [
                 "sysbox",
                 "privileged"
@@ -331,7 +331,7 @@
             "acknowledgePrivileged": {
               "description": "Required to render isolation: privileged; confirms the namespace admits privileged pods.",
               "type": "boolean",
-              "default": false
+              "default": true
             },
             "image": {
               "description": "Runner (docker-in-docker) image.",
@@ -393,14 +393,12 @@
               "x-kubernetes-int-or-string": true
             },
             "nodeSelector": {
-              "description": "Node selector for the runner pods (defaults to sysbox-install: yes).",
+              "description": "Node selector for the runner pods. Empty by default; set sysbox-install: yes when using isolation: sysbox.",
               "type": "object",
-              "default": {
-                "sysbox-install": "yes"
-              }
+              "default": {}
             },
             "tolerations": {
-              "description": "Tolerations for the Sysbox taint (defaults to the upstream sysbox-runtime=not-running toleration).",
+              "description": "Tolerations for the runner pods. Empty by default; set the upstream sysbox-runtime=not-running toleration when using isolation: sysbox.",
               "type": "array",
               "items": {
                 "type": "object",
@@ -422,14 +420,7 @@
                   }
                 }
               },
-              "default": [
-                {
-                  "key": "sysbox-runtime",
-                  "operator": "Equal",
-                  "value": "not-running",
-                  "effect": "NoSchedule"
-                }
-              ]
+              "default": []
             },
             "resourcesPreset": {
               "description": "Sizing preset for each runner replica.",

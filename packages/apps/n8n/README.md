@@ -1,6 +1,6 @@
 # n8n
 
-A single self-contained n8n Marketplace app chart for Cozystack 1.7.1. It deploys one n8n instance (SQLite storage, one replica) and provides two optional toggles: the **Code Sandbox** (the [n8n sandbox service](https://github.com/n8n-io/n8n-sandbox-service) — sandbox API + Sysbox runners, **Setup 1**) and **Search** (an in-cluster SearXNG instance with its JSON API enabled). The chart does not depend on `cozy-lib` and renders standalone with `helm lint`/`helm template`; injected Cozystack values (`_namespace`, `_cluster`) are optional.
+A single self-contained n8n Marketplace app chart for Cozystack 1.7.1. It deploys one n8n instance (SQLite storage, one replica) and provides two optional toggles: the **Code Sandbox** (the [n8n sandbox service](https://github.com/n8n-io/n8n-sandbox-service) — sandbox API + runner, shipped with portable **`privileged`** isolation so it works on any cluster; **Sysbox is opt-in**) and **Search** (an in-cluster SearXNG instance with its JSON API enabled). The chart does not depend on `cozy-lib` and renders standalone with `helm lint`/`helm template`; injected Cozystack values (`_namespace`, `_cluster`) are optional.
 
 The deployment guide lives in the top-level repository README; this document is the chart reference.
 
@@ -8,7 +8,7 @@ The deployment guide lives in the top-level repository README; this document is 
 
 | Value | Default | Description |
 |---|---|---|
-| `sandbox.enabled` | `false` | Code Sandbox — deploys the n8n sandbox API (`n8nio/n8n-sandbox-service-api`) plus Sysbox runners and wires n8n to it with `N8N_INSTANCE_AI_SANDBOX_*` / `N8N_SANDBOX_SERVICE_*`. |
+| `sandbox.enabled` | `false` | Code Sandbox — deploys the n8n sandbox API (`n8nio/n8n-sandbox-service-api`) plus a `privileged` runner and wires n8n to it with `N8N_INSTANCE_AI_SANDBOX_*` / `N8N_SANDBOX_SERVICE_*`. |
 | `search.enabled` | `false` | Search — deploys a private in-cluster SearXNG with its JSON API enabled at `http://<release>-search:8080`. |
 
 ## Values
@@ -44,8 +44,8 @@ The deployment guide lives in the top-level repository README; this document is 
 | `sandbox.api.resourcesPreset` | `t1.small` | Sizing preset for the API container. |
 | `sandbox.api.resources.cpu` / `.memory` | `""` | Explicit overrides for the API container. |
 | `sandbox.runner.enabled` | `true` | Render the runner StatefulSet. |
-| `sandbox.runner.isolation` | `sysbox` | `sysbox` (needs the Sysbox node pool) or `privileged` (works on Talos / immutable-rootfs clusters). |
-| `sandbox.runner.acknowledgePrivileged` | `false` | Must be `true` when `isolation: privileged`; the chart fails otherwise. |
+| `sandbox.runner.isolation` | `privileged` | **Portable shipped default** — runs on any node (including Talos / immutable-rootfs clusters). Set `sysbox` only as opt-in when a real dedicated Ubuntu + Sysbox node pool exists. |
+| `sandbox.runner.acknowledgePrivileged` | `true` | Confirms the namespace admits privileged pods; the chart fails to render a privileged runner when `false`. Default-on to match the shipped `privileged` isolation. |
 | `sandbox.runner.image.repository` | `n8nio/n8n-sandbox-service-runner-dind` | Runner image. |
 | `sandbox.runner.image.tag` | `1.16.0` | Runner image tag. |
 | `sandbox.runner.sandboxImage.repository` | `n8nio/n8n-sandbox-service-sandbox` | Sandbox workload image. |
@@ -53,19 +53,21 @@ The deployment guide lives in the top-level repository README; this document is 
 | `sandbox.runner.replicas` | `1` | Number of runner replicas. |
 | `sandbox.runner.capacityTotal` | `100` | Runner capacity (mandatory; size it for your node pool). |
 | `sandbox.runner.dataRootSizeLimit` | `64Gi` | emptyDir size limit for the Docker data root. |
-| `sandbox.runner.nodeSelector` | `{sysbox-install: "yes"}` | Node selector for the runner pods. |
-| `sandbox.runner.tolerations` | `[{key: sysbox-runtime, operator: Equal, value: not-running, effect: NoSchedule}]` | Tolerations matching the Sysbox installer taint. |
+| `sandbox.runner.nodeSelector` | `{}` | Empty by default (portable). Sysbox opt-in users must set `{sysbox-install: "yes"}` explicitly. |
+| `sandbox.runner.tolerations` | `[]` | Empty by default. Sysbox opt-in users must set the upstream `sysbox-runtime=not-running:NoSchedule` toleration explicitly. |
 | `sandbox.runner.resourcesPreset` | `t1.medium` | Sizing preset for the runner container. |
 | `sandbox.runner.resources.cpu` / `.memory` | `""` | Explicit overrides for the runner container. |
 
 #### External sandbox VM (real Sysbox on Cozystack)
 
-On clusters whose nodes cannot run Sysbox (e.g. **Talos**, which has a read-only
-root filesystem), a dedicated Ubuntu VM is the only way to get real Sysbox
-isolation. Set `sandbox.enabled=true` + `sandbox.external.enabled=true` plus
-`sandbox.external.url` / `sandbox.external.apiKey`; the chart then renders **no**
-in-cluster sandbox objects and only sets the four `N8N_*SANDBOX*` env vars as
-plain values.
+The shipped `privileged` in-cluster default works on any cluster without Sysbox.
+Use this external VM path only when you specifically want **real Sysbox isolation**
+(runners that do not need `privileged: true`) — Sysbox cannot be installed on
+immutable-rootfs nodes such as **Talos**, so a dedicated Ubuntu VM is the only way
+to get it on those clusters. Set `sandbox.enabled=true` +
+`sandbox.external.enabled=true` plus `sandbox.external.url` /
+`sandbox.external.apiKey`; the chart then renders **no** in-cluster sandbox
+objects and only sets the four `N8N_*SANDBOX*` env vars as plain values.
 
 [`deploy/sandbox-vm/README.md`](../../deploy/sandbox-vm/README.md) contains
 Cozystack `VMDisk` + `VMInstance` manifests that auto-provision that Ubuntu VM
@@ -120,7 +122,8 @@ then set the values above.
 - **n8n >= 2.16.0** is required for the sandbox service integration (pinned `2.48.5`); the `instance-ai` module is enabled by default.
 - `N8N_ENCRYPTION_KEY` is stable across upgrades: it is generated once and then preserved via `lookup` from the live `<release>-credentials` Secret, so existing credentials remain decryptable. The same Secret carries `SANDBOX_API_KEY`, shared with the sandbox service so the two sides can never drift.
 - n8n talks to the sandbox API over plain HTTP on the ClusterIP. mTLS between the API and its runners is mandatory; the chart generates a self-signed CA and four leaf certificates in-chart and preserves them via `lookup` — **no cert-manager dependency**.
-- **Sysbox is a cluster-level prerequisite**: a dedicated Ubuntu node pool with Sysbox installed (Kubernetes 1.32+, >= 4 CPU / 4 GB per node, `br_netfilter`, `RuntimeClass sysbox-runc`). On immutable-rootfs distributions such as **Talos**, Sysbox cannot install — use `runner.isolation: privileged` with `runner.acknowledgePrivileged: true` and label the namespace `pod-security.kubernetes.io/enforce=privileged`. See the top-level README for the full setup.
+- **The shipped default is `privileged` runner isolation** — it runs on any node (including **Talos** / immutable-rootfs distributions) with no Sysbox prerequisites: `isolation: privileged`, `acknowledgePrivileged: true`, empty `nodeSelector`/`tolerations`. One namespace-level prerequisite applies: privileged pods are rejected by Cozystack's default `baseline` Pod Security policy, so the tenant namespace needs `pod-security.kubernetes.io/enforce=privileged` (the chart cannot set this label itself).
+- **Sysbox is opt-in**: only set `sandbox.runner.isolation: sysbox` on clusters with a real dedicated Ubuntu node pool with Sysbox installed (Kubernetes 1.32+, >= 4 CPU / 4 GB per node, `br_netfilter`, `RuntimeClass sysbox-runc`). Because the defaults for `sandbox.runner.nodeSelector` and `sandbox.runner.tolerations` are now empty, Sysbox users must also set both explicitly (`nodeSelector: {sysbox-install: "yes"}` and the upstream `sysbox-runtime=not-running:NoSchedule` toleration). See the top-level README for the full setup.
 - The sandbox service images come from `n8n-io/n8n-sandbox-service` under n8n's **Sustainable Use License** (not MIT); this chart only references them.
 - n8n runs in SQLite/standalone mode, which means exactly 1 replica (no queue mode); the Deployment uses a `Recreate` strategy because the data volume is RWO.
 - `resourcesPreset` reproduces Cozystack's `cozy-lib` preset matrix faithfully (size `nano`…`4xlarge` × series `t1/c1/s1/u1/m1` plus the legacy flat aliases): limits are `cpu`/`memory`/`ephemeral-storage`, and requests are derived as `cpu = ceil(limit/10)`, `memory = limit`, `ephemeral-storage = int(limit/40)`. Explicit `resources.cpu` / `resources.memory` override the preset limits.

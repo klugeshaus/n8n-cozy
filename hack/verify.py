@@ -425,7 +425,29 @@ def check_values_schema(c: Check):
         c.fail(f"schema properties missing from values.yaml: {missing_in_values}")
     if undeclared:
         c.fail(f"values.yaml keys not declared in schema: {undeclared}")
-    c.ok(f"values.yaml validates; {len(vkeys)} top-level keys == schema properties")
+
+    # The Marketplace form is generated from this schema. On clusters without a
+    # Sysbox node pool (e.g. Talos) the shipped defaults MUST be schedulable,
+    # otherwise every fresh Deploy times out waiting for the runner StatefulSet.
+    runner = (schema["properties"]["sandbox"]["properties"]["runner"]
+              ["properties"])
+    expected_defaults = {
+        "isolation": "privileged",
+        "acknowledgePrivileged": True,
+        "nodeSelector": {},
+        "tolerations": [],
+    }
+    for key, want in expected_defaults.items():
+        got = runner[key].get("default")
+        if got != want:
+            c.fail(f"sandbox.runner.{key} default = {got!r}, expected {want!r} "
+                   f"(fresh Marketplace deploys must be schedulable without Sysbox)")
+    # The structural CRD generator rejects arrays without an items schema.
+    if "items" not in runner["tolerations"]:
+        c.fail("sandbox.runner.tolerations lost its 'items' schema "
+               "(structural CRD generation would reject the injected default)")
+    c.ok(f"values.yaml validates; {len(vkeys)} top-level keys == schema properties; "
+         f"runner defaults are portable (privileged)")
 
 
 # --------------------------------------------------------------------------
@@ -535,6 +557,11 @@ def check_render_matrix(c: Check):
                       "--set", "sandbox.external.url=http://10.244.1.50:8080",
                       "--set", "sandbox.external.apiKey=test-key-123",
                       "--set", "search.enabled=true"), 11),
+        # Opt-in sysbox mode must still render the RuntimeClass + node selector
+        # even though the shipped default is now portable privileged isolation.
+        ("sysbox", ("--set", "sandbox.enabled=true",
+                    "--set", "sandbox.runner.isolation=sysbox",
+                    "--set", "sandbox.runner.nodeSelector.sysbox-install=yes"), 20),
     ]
     rendered = {}
     for label, args, expected in cases:
@@ -739,9 +766,22 @@ def check_render_matrix(c: Check):
         c.fail("external mode: search must still render when enabled")
     if raw_contains(ext, "N8N_RUNNERS") or raw_contains(ext, "n8n-test-broker"):
         c.fail("external render still contains task-runner / broker references")
-    c.ok("render matrix: 8/20/11/23/23/8/8/11 docs, sandbox service objects, "
-         "external mode, n8n env wiring, HTTPRoute switch, selector contract, "
-         "preset matrix, wildcard TLS")
+    # j) explicit sysbox opt-in still renders the RuntimeClass + node selector
+    sysbox = rendered["sysbox"]
+    sysbox_sts = by_name(sysbox, "StatefulSet", "n8n-test-sandbox-runner")
+    if sysbox_sts is None:
+        c.fail("sysbox opt-in: runner StatefulSet missing")
+    else:
+        ssp = sysbox_sts["spec"]["template"]["spec"]
+        if ssp.get("runtimeClassName") != "sysbox-runc":
+            c.fail("sysbox opt-in: runtimeClassName != sysbox-runc")
+        if (ssp.get("nodeSelector") or {}).get("sysbox-install") != "yes":
+            c.fail("sysbox opt-in: nodeSelector sysbox-install=yes missing")
+        if (ssp["containers"][0].get("securityContext") or {}).get("privileged"):
+            c.fail("sysbox opt-in: runner must not be privileged")
+    c.ok("render matrix: 8/20/11/23/23/8/8/11/20 docs, sandbox service objects, "
+         "external mode, sysbox opt-in, n8n env wiring, HTTPRoute switch, "
+         "selector contract, preset matrix, wildcard TLS")
 
 # --------------------------------------------------------------------------
 # 9. RD chart render

@@ -101,17 +101,17 @@ communityPackages: ""
 ## @field {ResourcesPreset} resourcesPreset - Sizing preset for the API container.
 ## @field {Resources} resources - Explicit CPU/memory overrides for the API container.
 
-## @typedef {struct} SandboxRunner - Sysbox runners that execute the generated code. Sysbox itself is installed once on a dedicated node pool (cluster prerequisite, see README).
+## @typedef {struct} SandboxRunner - Runners that execute the generated code. The default `privileged` isolation runs on any node (including immutable-rootfs distributions such as Talos); `sysbox` is opt-in for clusters with a real Sysbox node pool.
 ## @field {bool} enabled - Deploy the runner StatefulSet and its headless Service.
-## @field {string} isolation - `sysbox` (recommended; needs Sysbox on the node) or `privileged` (needed on immutable-rootfs distributions such as Talos).
+## @field {string} isolation - `privileged` (portable default; runs on any node, needs a PSA-privileged namespace) or `sysbox` (opt-in; needs Sysbox installed on a dedicated node pool).
 ## @field {bool} acknowledgePrivileged - Required to render `isolation: privileged`; confirms the namespace admits privileged pods.
 ## @field {SandboxImage} image - Runner (docker-in-docker) image.
 ## @field {SandboxImage} sandboxImage - Image each sandbox container runs from.
 ## @field {int} replicas - Number of runner replicas.
 ## @field {string} capacityTotal - Maximum concurrent sandboxes per runner. Mandatory; size it for your node pool.
 ## @field {quantity} dataRootSizeLimit - Size limit of the runner's scratch `emptyDir`.
-## @field {object} nodeSelector - Node selector for the runner pods (defaults to `sysbox-install: "yes"`).
-## @field {array} tolerations - Tolerations for the Sysbox taint (defaults to the upstream `sysbox-runtime=not-running` toleration).
+## @field {object} nodeSelector - Node selector for the runner pods. Empty by default; set `sysbox-install: "yes"` when using `isolation: sysbox`.
+## @field {array} tolerations - Tolerations for the runner pods. Empty by default; set the upstream `sysbox-runtime=not-running` toleration when using `isolation: sysbox`.
 ## @field {ResourcesPreset} resourcesPreset - Sizing preset for each runner replica.
 ## @field {Resources} resources - Explicit CPU/memory overrides for each runner replica.
 
@@ -145,11 +145,11 @@ sandbox:
     resourcesPreset: "t1.small"
     resources: {}
 
-  ## @param {SandboxRunner} runner - Sysbox sandbox runners.
+  ## @param {SandboxRunner} runner - Sandbox runners. The portable `privileged` default works on any cluster (including Talos); switch to `sysbox` only when a real Sysbox node pool exists.
   runner:
     enabled: true
-    isolation: sysbox
-    acknowledgePrivileged: false
+    isolation: privileged
+    acknowledgePrivileged: true
     image:
       repository: n8nio/n8n-sandbox-service-runner-dind
       tag: "1.16.0"
@@ -159,13 +159,10 @@ sandbox:
     replicas: 1
     capacityTotal: "100"
     dataRootSizeLimit: 64Gi
-    nodeSelector:
-      sysbox-install: "yes"
-    tolerations:
-      - key: sysbox-runtime
-        operator: Equal
-        value: not-running
-        effect: NoSchedule
+    # Sysbox-only placement. Leave empty for the portable privileged default;
+    # set both when switching to `isolation: sysbox` (see README).
+    nodeSelector: {}
+    tolerations: []
     resourcesPreset: "t1.medium"
     resources: {}
 

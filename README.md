@@ -6,7 +6,7 @@ optional checkboxes:
 
 | Toggle | What it deploys |
 |---|---|
-| **Code Sandbox** | The [n8n sandbox service](https://github.com/n8n-io/n8n-sandbox-service) — sandbox API + Sysbox runners — deployed alongside n8n and wired via `N8N_INSTANCE_AI_SANDBOX_*`. **Setup 1**, the setup n8n recommends for self-hosted production. |
+| **Code Sandbox** | The [n8n sandbox service](https://github.com/n8n-io/n8n-sandbox-service) — sandbox API + runner — deployed alongside n8n and wired via `N8N_INSTANCE_AI_SANDBOX_*`. Ships with portable **`privileged`** runner isolation so it works on any cluster (including Talos); **Sysbox is opt-in** for clusters with a real Sysbox node pool. |
 | **Search (SearXNG)** | A private in-cluster SearXNG metasearch engine with its **JSON API** enabled, reachable from n8n at `http://<release>-search:8080`. |
 
 Both are disabled by default. Enabling them deploys the extra components as
@@ -90,12 +90,17 @@ packages/
 - An OCI registry you can push to (e.g. `ghcr.io/<org>/n8n`).
 - For community nodes / SearXNG upstream engines: outbound internet from the
   tenant namespace (npm registry, search engines).
-- **Only for the Code Sandbox toggle:** a dedicated Ubuntu node pool with
+- **Only for the Code Sandbox toggle:** the shipped `privileged` runner
+  isolation works on any node but requires the tenant namespace to allow
+  privileged pods — `pod-security.kubernetes.io/enforce=privileged` (the
+  cluster default is `baseline`). This is a namespace-level prerequisite the
+  chart cannot set itself; see
+  [Code Sandbox](#code-sandbox-n8n-sandbox-service--sysbox).
+- **Only for opt-in `isolation: sysbox`:** a dedicated Ubuntu node pool with
   Sysbox installed (Kubernetes 1.32+, >= 4 CPU / 4 GB per node,
-  `br_netfilter`, `RuntimeClass sysbox-runc`). That is a cluster-level
-  prerequisite — see [Code Sandbox](#code-sandbox-n8n-sandbox-service--sysbox).
-  On immutable-rootfs clusters such as **Talos** use privileged isolation
-  instead.
+  `br_netfilter`, `RuntimeClass sysbox-runc`), plus
+  `sandbox.runner.nodeSelector` and `sandbox.runner.tolerations` set for that
+  pool.
 
 > **RBAC:** no ClusterRole edit is needed. In `v1.7.1`,
 > `cozystack-basics`'s `cozy:tenant:base` role already grants
@@ -336,15 +341,15 @@ dashboard shows for the `n8n-ai-search` workload:
 written into `server.secret_key` in the same Secret's `settings.yml`. n8n
 itself receives `SEARXNG_URL` (without the trailing slash) for convenience.
 
-### Code Sandbox (n8n sandbox service + Sysbox)
-
-This is **Setup 1** from the n8n docs — the setup n8n recommends for
-self-hosted production. Workflow data stays in your infrastructure, and with
-Sysbox the runners do **not** need `privileged: true`.
+### Code Sandbox (n8n sandbox service)
 
 Enabling `sandbox.enabled` renders the whole
 [n8n sandbox service](https://github.com/n8n-io/n8n-sandbox-service) inside
-the same instance and points n8n at it:
+the instance and points n8n at it. Workflow data stays in your infrastructure.
+The chart ships with **`privileged` runner isolation as the portable default**
+— it runs on any node, including immutable-rootfs distributions such as
+**Talos**, with no Sysbox prerequisites. **`sysbox` isolation is opt-in** for
+clusters that have a real dedicated Ubuntu + Sysbox node pool (see below).
 
 | Object | Name |
 | --- | --- |
@@ -377,9 +382,16 @@ mTLS is used only between the API and its runners, and is mandatory there. The
 chart generates a self-signed CA and the four leaf certificates in-chart and
 preserves them via `lookup`, so **no cert-manager dependency** is introduced.
 
-#### Cluster-level prerequisites (not installed by this chart)
+#### Opt-in: Sysbox isolation (dedicated Ubuntu node pool)
 
-The sandbox runners need a dedicated node pool prepared once, cluster-wide:
+**Only needed when you explicitly set `sandbox.runner.isolation: sysbox`** —
+the shipped `privileged` default needs none of this. Because the defaults for
+`sandbox.runner.nodeSelector` and `sandbox.runner.tolerations` are now empty,
+Sysbox users must set both to match their pool, e.g.
+`nodeSelector: {sysbox-install: "yes"}` and the upstream
+`sysbox-runtime=not-running:NoSchedule` toleration.
+
+The sandbox runners then need a dedicated node pool prepared once, cluster-wide:
 
 | Requirement | Value |
 | --- | --- |
@@ -406,28 +418,42 @@ Provider notes: **GKE** — Standard clusters with Ubuntu node pools only
 Amazon Linux. **AKS** — the default worker nodes work; use at least four
 vCPUs per node.
 
-#### Talos / immutable-rootfs clusters
+#### Default: privileged isolation and Pod Security
 
-Sysbox cannot install on distributions with a read-only root filesystem and
-machine-managed containerd configuration — this includes **Talos**,
-Bottlerocket, Flatcar and Fedora CoreOS. On such clusters switch the runner to
-privileged isolation, which runs on any node:
+`privileged` isolation is the **shipped default** (`isolation: privileged`,
+`acknowledgePrivileged: true`, empty `nodeSelector`/`tolerations`). It runs on
+any node, including **Talos**, Bottlerocket, Flatcar and Fedora CoreOS, where
+Sysbox cannot install (read-only rootfs + machine-managed containerd). No
+RuntimeClass or labelled node pool is required.
+
+The one prerequisite is **Pod Security**: privileged runner pods are rejected
+by the `baseline` policy that Cozystack applies by default to tenant
+namespaces. The chart cannot set this label itself, so label the tenant
+namespace before deploying:
+
+```
+kubectl label namespace <tenant-ns> pod-security.kubernetes.io/enforce=privileged
+```
+
+`acknowledgePrivileged: true` is already the default; the chart refuses to
+render a privileged runner if it is set to `false`. If you ever need to
+restore the defaults explicitly:
 
 ```
 --set sandbox.runner.isolation=privileged \
 --set sandbox.runner.acknowledgePrivileged=true
-kubectl label namespace <tenant-ns> pod-security.kubernetes.io/enforce=privileged
 ```
 
-The chart refuses to render a privileged runner unless
-`acknowledgePrivileged` is `true`, and privileged pods require the namespace
-PSA label. On the cluster this repo was developed against, all four nodes are
-Talos, so this is the only usable mode there.
+On the cluster this repo was developed against, all four nodes are Talos, so
+this is the mode that works there.
 
 #### Automatic sandbox VM (real Sysbox on Cozystack)
 
 **Yes — this can be automated.** Sysbox cannot be installed on Talos, so the
 only way to get real Sysbox isolation on this cluster is a dedicated Ubuntu VM.
+This is an **alternative** to the shipped `privileged` in-cluster default: use
+it when you specifically want Sysbox isolation (runners that do not need
+`privileged: true`) rather than the portable default.
 Cozystack ships KubeVirt + CDI and the `VMInstance` / `VMDisk` Marketplace
 application definitions, so a VM can be *declaratively* provisioned with a
 `VMInstance` CR (Ubuntu cloud image + cloud-init). See
