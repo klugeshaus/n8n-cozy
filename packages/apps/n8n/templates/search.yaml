@@ -112,18 +112,25 @@ spec:
               mountPath: /var/cache/searxng
           resources:
             {{- include "n8n.resources" (dict "preset" .Values.search.resourcesPreset "explicit" .Values.search.resources) | nindent 12 }}
+          # SearXNG needs a moment to load its settings and engine list; gate the
+          # other probes on a successful first response instead of fixed delays.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 30
             periodSeconds: 20
             timeoutSeconds: 5
       volumes:

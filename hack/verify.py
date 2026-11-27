@@ -500,6 +500,14 @@ def container_resources(doc, container="n8n"):
     return {}
 
 
+def container_probes(doc, container="n8n"):
+    """Return the probe dict of a named container in a Deployment doc."""
+    for cont in ((doc.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers", []):
+        if cont.get("name") == container:
+            return {k: cont.get(k) for k in ("startupProbe", "readinessProbe", "livenessProbe")}
+    return {}
+
+
 def doc_names(docs, kind):
     return sorted(d["metadata"]["name"] for d in docs
                   if d.get("kind") == kind and isinstance(d.get("metadata"), dict))
@@ -611,6 +619,23 @@ def check_render_matrix(c: Check):
             c.fail(f"default render must not set {name} when sandbox.enabled=false")
     if any("sandbox" in (d.get("metadata", {}).get("name") or "") for d in default):
         c.fail("default render must not contain any sandbox-* object")
+
+    # a2) cold-boot probes: n8n main + SearXNG must gate readiness/liveness
+    # behind a startupProbe so slow first boots do not emit Unhealthy events.
+    both = rendered["sandbox+search"]
+    for deploy_name, cont in (("n8n-test", "n8n"), ("n8n-test-search", "searxng")):
+        dep = by_name(both, "Deployment", deploy_name)
+        probes = container_probes(dep or {}, cont)
+        sp = probes.get("startupProbe") or {}
+        if not sp:
+            c.fail(f"{deploy_name}/{cont} is missing startupProbe (cold-boot Unhealthy events)")
+        elif ((sp.get("httpGet") or {}).get("path") != "/healthz"
+              or (sp.get("httpGet") or {}).get("port") != "http"):
+            c.fail(f"{deploy_name}/{cont} startupProbe must hit /healthz on port http")
+        for p in ("readinessProbe", "livenessProbe"):
+            if (probes.get(p) or {}).get("initialDelaySeconds") is not None:
+                c.fail(f"{deploy_name}/{cont} {p} still sets initialDelaySeconds "
+                       "(startupProbe should gate it)")
 
     # b) sandbox-on object set
     sandbox = rendered["sandbox"]

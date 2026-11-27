@@ -97,18 +97,26 @@ spec:
               mountPath: /home/node/.n8n
           resources:
             {{- include "n8n.resources" (dict "preset" .Values.resourcesPreset "explicit" .Values.resources) | nindent 12 }}
+          # n8n cold start (SQLite migration + community-node reconciliation) can
+          # take several minutes. A startupProbe gates readiness/liveness until
+          # the first success, so a slow boot no longer emits Unhealthy events.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 30
             periodSeconds: 20
             timeoutSeconds: 5
       volumes:
