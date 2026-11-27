@@ -382,6 +382,26 @@ mTLS is used only between the API and its runners, and is mandatory there. The
 chart generates a self-signed CA and the four leaf certificates in-chart and
 preserves them via `lookup`, so **no cert-manager dependency** is introduced.
 
+#### "Add a code sandbox" in the n8n UI
+
+When `sandbox.enabled` is on, n8n's **Settings → Add a code sandbox** panel
+shows:
+
+> The Assistant and Agents use the sandbox to run code and work with files. It
+> never runs on the host running n8n, so choose where the sandbox comes from.
+> These settings are managed by environment variables. To edit them here,
+> remove the environment variables and restart n8n.
+
+That is expected and confirms the wiring: the four `N8N_*SANDBOX*` variables
+above are injected on the n8n Deployment, so n8n marks the settings as
+externally managed and greys out editing. **Configure the sandbox in the
+Cozystack Marketplace Deploy form, not in the n8n UI** — use
+`sandbox.enabled`, `sandbox.external.*` (external VM mode), and
+`sandbox.apiKey`. Removing the env vars to edit them in the UI is not supported
+by this chart: without them the chart deploys no sandbox service at all, and
+you would have to supply and secure one yourself (the API, the runners, the
+mTLS certificates and the `SANDBOX_API_KEYS` / API-key agreement).
+
 #### Opt-in: Sysbox isolation (dedicated Ubuntu node pool)
 
 **Only needed when you explicitly set `sandbox.runner.isolation: sysbox`** —

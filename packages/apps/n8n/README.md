@@ -107,6 +107,13 @@ then set the values above.
 | `N8N_SANDBOX_SERVICE_URL` | `http://<release>-sandbox:8080` |
 | `N8N_SANDBOX_SERVICE_API_KEY` | from `<release>-credentials` / `SANDBOX_API_KEY` — must match `SANDBOX_API_KEYS` |
 
+Because these are environment variables, n8n's **Settings → Add a code
+sandbox** panel reports "These settings are managed by environment variables"
+and greys out editing. Configure the sandbox through the Marketplace Deploy
+form (`sandbox.enabled`, `sandbox.external.*`, `sandbox.apiKey`) instead. Do
+not remove the env vars: the chart would then deploy no sandbox service at all,
+leaving no API, runners or mTLS certificates.
+
 ## Images
 
 | Component | Image |
